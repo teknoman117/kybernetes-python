@@ -1,8 +1,9 @@
-from asyncio import wait_for
+from asyncio import get_event_loop, create_task, wait_for, Event
 from crc8 import crc8
 from ctypes import c_uint8, c_uint16, c_int16, c_float, memmove, pointer, sizeof, Structure
+from serial_asyncio import open_serial_connection
 
-import serial_asyncio
+import time
 
 DEFAULT_BAUDRATE = 1000000
 DEFAULT_DEVICE = "/dev/motioncontroller"
@@ -90,7 +91,7 @@ class KillSwitchStatusPacket(Structure):
             servoThrottleInput={self.servoThrottleInput},
         }}'''
 
-class StatusPacket(Structure):    
+class StatusPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_STATUS
 
     _pack_ = 1
@@ -141,44 +142,61 @@ class SteeringSetPacket(Structure):
 
     _pack_ = 1
     _fields_ = [
-        ("servoSteeringInput", c_int16)
+        ("position", c_int16)
     ]
+
+    def __format__(self, spec):
+        return f'SteeringSetPacket(position={self.position})'
 
 class ThrottleSetPWMPacket(Structure):
     SEND_TYPE = PACKET_TYPE_THROTTLE_SET_PWM
 
     _pack_ = 1
     _fields_ = [
-        ("servoThrottleOutput", c_int16)
+        ("value", c_int16)
     ]
+
+    def __format__(self, spec):
+        return f'ThrottleSetPWMPacket(value={self.value})'
 
 class ThrottleSetPIDPacket(Structure):
     SEND_TYPE = PACKET_TYPE_THROTTLE_SET_PID
 
     _pack_ = 1
     _fields_ = [
-        ("servoThrottlePIDTarget", c_int16)
+        ("target", c_int16)
     ]
+
+    def __format__(self, spec):
+        return f'ThrottleSetPIDPacket(target={self.target})'
 
 class SendArmPacket(Structure):
     SEND_TYPE = PACKET_TYPE_SEND_ARM
     _pack_ = 1
     _fields_ = []
+    def __format__(self, spec):
+        return 'SendArmPacket()'
 
 class SendKeepalivePacket(Structure):
     SEND_TYPE = PACKET_TYPE_SEND_KEEPALIVE
     _pack_ = 1
     _fields_ = []
-    
+    def __format__(self, spec):
+        return 'SendKeepalivePacket()'
+
 class SendDisarmPacket(Structure):
     SEND_TYPE = PACKET_TYPE_SEND_DISARM
     _pack_ = 1
     _fields_ = []
+    def __format__(self, spec):
+        return 'SendDisarmPacket()'
 
 class ConfigurationGetCommand(Structure):
     SEND_TYPE = PACKET_TYPE_CONFIGURATION_GET
     _pack_ = 1
     _fields_ = []
+    def __format__(self, spec):
+        return 'ConfigurationGetCommand()'
 
 class SyncPacket(Structure):
     SEND_TYPE = PACKET_TYPE_SYNC
@@ -192,7 +210,7 @@ class SyncPacket(Structure):
 class AckPacket(Structure):
     _pack_ = 1
     _fields_ = []
-    
+
 class ConfigurationSetAckPacket(AckPacket):
     def __format__(self, spec):
         return f"ConfigurationSetAckPacket {{}}"
@@ -224,8 +242,8 @@ class SendDisarmAckPacket(AckPacket):
 class NackPacket(Structure):
     _pack_ = 1
     _fields_ = [
-        ("packetType", c_uint8),
-        ("failureType", c_uint8)
+        ("command_type_id", c_uint8),
+        ("failure_type_id", c_uint8)
     ]
 
     def __format__(self, spec):
@@ -248,6 +266,9 @@ PACKET_TYPE_BY_ID = {
 class InvalidChecksumError(Exception):
     pass
 
+class DesyncError(Exception):
+    pass
+
 class Connection():
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls)
@@ -255,24 +276,22 @@ class Connection():
     def __init__(self, device=DEFAULT_DEVICE, baudrate=DEFAULT_BAUDRATE):
         self.device = device
         self.baudrate = baudrate
-        self.reader = None
-        self.writer = None
-
-    async def open(self):
-        self.reader, self.writer = await serial_asyncio.open_serial_connection(url=self.device, baudrate=self.baudrate)
-        await self.synchronize()
-    
-    async def drain(self):
-        await self.writer.drain()
+        self.stop_requested = False
+        self.command_futures = []
+        self.status_futures = []
+        self.status = StatusPacket()
+        self.armed_event = Event()
+        self.disarmed_event = Event()
+        self.idle_event = Event()
 
     async def synchronize(self):
         while True:
-            # find the leader
+            # find the first sync byte (0xff)
             data = await wait_for(self.reader.readexactly(1), timeout=5.0)
             if data[0] != 0xff:
                 continue
 
-            # sync packet is exactly sixteen 0xff's, so find the remaining 16
+            # sync packet is exactly sixteen 0xff's, so find the remaining 15
             candidate = await self.reader.readexactly(15)
             target = bytes([0xff]) * 15
             if candidate != target:
@@ -282,7 +301,7 @@ class Connection():
             else:
                 return
 
-    def sendPacket(self, packet):
+    def send_packet(self, packet):
         data = bytearray()
         data.append(packet.SEND_TYPE)
         if sizeof(packet) > 0:
@@ -291,9 +310,10 @@ class Connection():
         hash = crc8(data)
         data.extend(hash.digest())
 
+        print(f'[DEBUG {time.time()}] send_packet: {packet}')
         self.writer.write(data)
 
-    async def receivePacket(self):
+    async def receive_packet(self):
         pTypeId = (await self.reader.readexactly(1))[0]
         pType = PACKET_TYPE_BY_ID[pTypeId]
         data = await self.reader.readexactly(sizeof(pType))
@@ -303,7 +323,106 @@ class Connection():
         checksumLocal = hash.digest()[0]
         if checksumLocal != checksumRemote:
             raise InvalidChecksumError
-        
+
         packet = pType()
         memmove(pointer(packet), data, sizeof(pType))
-        return packet
+        print(f'[DEBUG {time.time()}] receive_packet: {packet}')
+        return (pTypeId, packet)
+
+    async def send_command(self, packet):
+        # this only works because motion controller processes commands in order
+        f = get_event_loop().create_future()
+        self.command_futures.append((type(packet).SEND_TYPE, f))
+        self.send_packet(packet)
+        await f
+        return f.result()
+
+    async def get_status(self):
+        f = get_event_loop().create_future()
+        self.status_futures.append(f)
+        return await f
+
+    async def arm(self):
+        await self.send_command(SendArmPacket())
+        await self.armed_event.wait()
+        create_task(self.keepalive())
+
+    async def disarm(self):
+        await self.send_command(SendDisarmPacket())
+        await self.disarmed_event.wait()
+
+    async def wait_until_armable(self):
+        while True:
+            s = await self.get_status()
+            if s.remote.armable:
+                break
+
+    async def wait_for_disarm(self):
+        await self.disarmed_event.wait()
+
+    async def wait_for_idle(self):
+        await self.idle_event.wait()
+
+    # keepalive loop
+    async def keepalive(self):
+        while not self.disarmed_event.is_set():
+            await self.send_command(SendKeepalivePacket())
+            await self.get_status()
+
+    # packet reactor
+    async def loop(self):
+        while not self.stop_requested:
+            (packet_type_id, packet) = await self.receive_packet()
+
+            if type(packet) is StatusPacket:
+                # detect arming state transitions
+                if packet.remote.state == KILL_SWITCH_STATE_ARMED:
+                    self.armed_event.set()
+                    self.disarmed_event.clear()
+                    self.idle_event.clear()
+                elif packet.remote.state == KILL_SWITCH_STATE_DISARMED:
+                    self.armed_event.clear()
+                    self.disarmed_event.set()
+                    self.idle_event.set()
+                else:
+                    # one of the "disarming" states
+                    self.armed_event.clear()
+                    self.disarmed_event.set()
+                    self.idle_event.clear()
+
+                # wake up 'get_status()' callers
+                for f in self.status_futures:
+                    f.set_result(packet)
+                self.status_futures.clear()
+
+                # keep a copy of the packet
+                self.status = packet
+
+            elif type(packet) is SyncPacket:
+                pass
+
+            elif type(packet) is NackPacket:
+                (command_type_id, f) = self.command_futures.pop(0)
+                if packet.command_type_id != command_type_id:
+                    # we have a de-sync between commands and responses
+                    # TODO: tear down and re-establish motion controller link
+                    raise DesyncError
+                f.set_result(packet)
+
+            else:
+                (command_type_id, f) = self.command_futures.pop(0)
+                if packet_type_id != command_type_id:
+                    # we have a de-sync between commands and responses
+                    # TODO: tear down and re-establish motion controller link
+                    raise DesyncError
+                f.set_result(packet)
+
+
+    async def start(self):
+        self.reader, self.writer = await open_serial_connection(url=self.device, baudrate=self.baudrate)
+        await self.synchronize()
+        self.task = create_task(self.loop())
+
+    async def stop(self):
+        self.stop_requested = True
+        await self.task
