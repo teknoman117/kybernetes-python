@@ -72,23 +72,23 @@ class PIDFrame(Structure):
 class KillSwitchStatusPacket(Structure):
     _pack_ = 1
     _fields_ = [
+        ("servoSteeringInput", c_uint16),
+        ("servoThrottleInput", c_uint16),
         ("servoSteeringInputUpdated", c_uint8, 1),
         ("servoThrottleInputUpdated", c_uint8, 1),
         ("armable", c_uint8, 1),
         ("unused1", c_uint8, 2),
         ("state", c_uint8, 3),
-        ("servoSteeringInput", c_uint16),
-        ("servoThrottleInput", c_uint16),
     ]
 
     def __format__(self, spec):
         return f'''KillSwitchStatusPacket {{
+            servoSteeringInput={self.servoSteeringInput},
+            servoThrottleInput={self.servoThrottleInput},
             servoSteeringInputUpdated={self.servoSteeringInputUpdated},
             servoThrottleInputUpdated={self.servoThrottleInputUpdated},
             armable={self.armable},
             state={self.state},
-            servoSteeringInput={self.servoSteeringInput},
-            servoThrottleInput={self.servoThrottleInput},
         }}'''
 
 class StatusPacket(Structure):
@@ -96,8 +96,8 @@ class StatusPacket(Structure):
 
     _pack_ = 1
     _fields_ = [
-        ("state", c_uint8),
         ("remote", KillSwitchStatusPacket),
+        ("state", c_uint8),
         ("batteryLow", c_uint8),
         ("align1", c_uint8),
         ("motion", PIDFrame),
@@ -105,8 +105,8 @@ class StatusPacket(Structure):
 
     def __format__(self, spec):
         return f'''StatusPacket {{
-            state={self.state},
             remote={self.remote},
+            state={self.state},
             batteryLow={self.batteryLow},
             motion={self.motion}
         }}'''
