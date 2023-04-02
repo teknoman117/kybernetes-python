@@ -1,57 +1,59 @@
 #!/usr/bin/env python
 
 import asyncio
-import time
 
 from kybernetes import MotionController
 
-async def remote_control():
-    # open motion controller connection
-    controller = MotionController.Connection()
-    await controller.start()
+class App():
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+    
+    def __init__(self):
+        self.controller = MotionController.Connection()
+    
+    async def run(self):
+        await self.controller.start()
 
-    # send the configuration packet
-    await controller.send_command(MotionController.ConfigurationPacket(\
-        servoThrottleDeadzoneForward = 1525,
-        servoThrottleDeadzoneBackward = 1475,
-        servoSteeringDeadzoneLeft = 1580,
-        servoSteeringDeadzoneRight = 1580,
-        Kp = 0.15,
-        Ki = 0.25,
-        Kd = 0.01
-    ))
+        # send the configuration packet
+        await self.controller.set_configuration(\
+            deadzone_forward = 1525,
+            deadzone_backward = 1475,
+            deadzone_left = 1580,
+            deadzone_right = 1580,
+            Kp = 0.15,
+            Ki = 0.25,
+            Kd = 0.01
+        )
 
-    while True:
-        # Forward motion
-        print('arm controller to move forward')
-        await controller.wait_until_armable()
-        await controller.arm()
-        print('moving forward')
-        await controller.send_command(MotionController.ThrottleSetPIDPacket(target=50))
         while True:
-            s = await controller.get_status()
-            if s.remote.state != MotionController.KILL_SWITCH_STATE_ARMED:
-                break
-            position = -(s.remote.servoSteeringInput - 1500)
-            await controller.send_command(MotionController.SteeringSetPacket(position=position))
-        print('disarmed. waiting for idle.')
-        await controller.wait_for_idle()
+            # Forward motion
+            print('arm self.controller to move forward')
+            await self.controller.wait_until_armable()
+            await self.controller.arm()
+            print('moving forward')
+            await self.controller.set_throttle_pid(50)
+            while True:
+                s = await self.controller.get_status()
+                if not s.armed():
+                    break
+                await self.controller.set_steering(-s.remote.servoSteeringInput + 1500)
+            print('disarmed. waiting for idle.')
+            await self.controller.wait_for_idle()
 
-        # Backward motion
-        print('arm controller to move backward')
-        await controller.wait_until_armable()
-        await controller.arm()
-        print('moving backward')
-        await controller.send_command(MotionController.ThrottleSetPIDPacket(target=-50))
-        while True:
-            s = await controller.get_status()
-            if s.remote.state != MotionController.KILL_SWITCH_STATE_ARMED:
-                break
-            position = -(s.remote.servoSteeringInput - 1500)
-            await controller.send_command(MotionController.SteeringSetPacket(position=position))
-        print('disarmed. waiting for idle.')
-        await controller.wait_for_idle()
+            # Backward motion
+            print('arm self.controller to move backward')
+            await self.controller.wait_until_armable()
+            await self.controller.arm()
+            print('moving backward')
+            await self.controller.set_throttle_pid(-50)
+            while True:
+                s = await self.controller.get_status()
+                if not s.armed():
+                    break
+                await self.controller.set_steering(-s.remote.servoSteeringInput + 1500)
+            print('disarmed. waiting for idle.')
+            await self.controller.wait_for_idle()
 
-# run main if we're being executed
+# run asynchronous app
 if __name__ == "__main__":
-    asyncio.run(remote_control())
+    asyncio.run(App().run())

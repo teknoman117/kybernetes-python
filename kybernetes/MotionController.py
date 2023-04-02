@@ -1,4 +1,4 @@
-from asyncio import get_event_loop, create_task, wait_for, Event
+from asyncio import TimeoutError, get_event_loop, create_task, wait_for, Event
 from crc8 import crc8
 from ctypes import c_uint8, c_uint16, c_int16, c_float, memmove, pointer, sizeof, Structure
 from serial_asyncio import open_serial_connection
@@ -110,6 +110,9 @@ class StatusPacket(Structure):
             batteryLow={self.batteryLow},
             motion={self.motion}
         }}'''
+    
+    def armed(self):
+        return self.remote.state == KILL_SWITCH_STATE_ARMED
 
 class ConfigurationPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_CONFIGURATION_GET
@@ -117,10 +120,10 @@ class ConfigurationPacket(Structure):
 
     _pack_ = 1
     _fields_ = [
-        ("servoSteeringDeadzoneLeft", c_uint16),
-        ("servoSteeringDeadzoneRight", c_uint16),
-        ("servoThrottleDeadzoneForward", c_uint16),
-        ("servoThrottleDeadzoneBackward", c_uint16),
+        ("deadzone_left", c_uint16),
+        ("deadzone_right", c_uint16),
+        ("deadzone_forward", c_uint16),
+        ("deadzone_backward", c_uint16),
         ("Kp", c_float),
         ("Ki", c_float),
         ("Kd", c_float)
@@ -128,10 +131,10 @@ class ConfigurationPacket(Structure):
 
     def __format__(self, spec):
         return f'''ConfigurationPacket {{
-            servoSteeringDeadzoneLeft={self.servoSteeringDeadzoneLeft},
-            servoSteeringDeadzoneRight={self.servoSteeringDeadzoneRight},
-            servoThrottleDeadzoneForward={self.servoThrottleDeadzoneForward},
-            servoThrottleDeadzoneBackward={self.servoThrottleDeadzoneBackward},
+            deadzone_left={self.deadzone_left},
+            deadzone_right={self.deadzone_right},
+            deadzone_forward={self.deadzone_forward},
+            deadzone_backward={self.deadzone_backward},
             Kp={self.Kp},
             Ki={self.Ki},
             Kd={self.Kd}
@@ -247,7 +250,7 @@ class NackPacket(Structure):
     ]
 
     def __format__(self, spec):
-        return f'''NackPacket {{packetType={self.packetType}, failureType={self.failureType}}}'''
+        return f'''NackPacket {{command_type_id={self.command_type_id}, failure_type_id={self.failure_type_id}}}'''
 
 PACKET_TYPE_BY_ID = {
     PACKET_TYPE_CONFIGURATION_SET : ConfigurationSetAckPacket,
@@ -310,7 +313,7 @@ class Connection():
         hash = crc8(data)
         data.extend(hash.digest())
 
-        print(f'[DEBUG {time.time()}] send_packet: {packet}')
+        #print(f'[DEBUG {time.time()}] send_packet: {packet}')
         self.writer.write(data)
 
     async def receive_packet(self):
@@ -326,7 +329,7 @@ class Connection():
 
         packet = pType()
         memmove(pointer(packet), data, sizeof(pType))
-        print(f'[DEBUG {time.time()}] receive_packet: {packet}')
+        #print(f'[DEBUG {time.time()}] receive_packet: {packet}')
         return (pTypeId, packet)
 
     async def send_command(self, packet):
@@ -334,18 +337,23 @@ class Connection():
         f = get_event_loop().create_future()
         self.command_futures.append((type(packet).SEND_TYPE, f))
         self.send_packet(packet)
-        await f
-        return f.result()
+        return await f
 
     async def get_status(self):
         f = get_event_loop().create_future()
         self.status_futures.append(f)
         return await f
 
-    async def arm(self):
+    async def arm(self, retries=5):
         await self.send_command(SendArmPacket())
-        await self.armed_event.wait()
-        create_task(self.keepalive())
+        for i in range(0, retries):
+            try:
+                await wait_for(self.armed_event.wait(), timeout=1.0)
+                create_task(self.keepalive())
+                return True
+            except TimeoutError:
+                await self.send_command(SendArmPacket())
+        return False
 
     async def disarm(self):
         await self.send_command(SendDisarmPacket())
@@ -362,6 +370,40 @@ class Connection():
 
     async def wait_for_idle(self):
         await self.idle_event.wait()
+
+    async def get_configuration(self):
+        command = ConfigurationGetCommand()
+        return await self.send_command(command)
+
+    async def set_configuration(self, deadzone_forward=None, deadzone_backward=None, deadzone_left=None, deadzone_right=None, Kp=None, Ki=None, Kd=None):
+        configuration = await self.get_configuration()
+        if not deadzone_forward is None:
+            configuration.deadzone_forward = deadzone_forward
+        if not deadzone_backward is None:
+            configuration.deadzone_backward = deadzone_backward
+        if not deadzone_left is None:
+            configuration.deadzone_left = deadzone_left
+        if not deadzone_right is None:
+            configuration.deadzone_right = deadzone_right
+        if not Kp is None:
+            configuration.Kp = Kp
+        if not Ki is None:
+            configuration.Ki = Ki
+        if not Kd is None:
+            configuration.Kd = Kd
+        return await self.send_command(configuration)
+
+    async def set_steering(self, position=0):
+        command = SteeringSetPacket(position = position)
+        return await self.send_command(command)
+
+    async def set_throttle_pwm(self, value=0):
+        command = ThrottleSetPWMPacket(value = value)
+        return await self.send_command(command)
+
+    async def set_throttle_pid(self, target=0):
+        command = ThrottleSetPIDPacket(target = target)
+        return await self.send_command(command)
 
     # keepalive loop
     async def keepalive(self):
@@ -395,9 +437,6 @@ class Connection():
                     f.set_result(packet)
                 self.status_futures.clear()
 
-                # keep a copy of the packet
-                self.status = packet
-
             elif type(packet) is SyncPacket:
                 pass
 
@@ -405,17 +444,19 @@ class Connection():
                 (command_type_id, f) = self.command_futures.pop(0)
                 if packet.command_type_id != command_type_id:
                     # we have a de-sync between commands and responses
-                    # TODO: tear down and re-establish motion controller link
-                    raise DesyncError
-                f.set_result(packet)
+                    # TODO: cancel inflight transactions and resync
+                    f.set_exception(DesyncError)
+                else:
+                    f.set_result(packet)
 
             else:
                 (command_type_id, f) = self.command_futures.pop(0)
                 if packet_type_id != command_type_id:
                     # we have a de-sync between commands and responses
                     # TODO: tear down and re-establish motion controller link
-                    raise DesyncError
-                f.set_result(packet)
+                    f.set_exception(DesyncError)
+                else:
+                    f.set_result(packet)
 
 
     async def start(self):
