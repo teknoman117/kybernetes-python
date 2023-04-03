@@ -445,7 +445,20 @@ class Connection():
                 if packet.command_type_id != command_type_id:
                     # we have a de-sync between commands and responses
                     # TODO: cancel inflight transactions and resync
-                    f.set_exception(DesyncError)
+                    print(f'Desynced Nack Packet = {packet}, expected command = {command_type_id}')
+                    #f.set_exception(DesyncError)
+
+                    # ask for a sync packet (will discard results of any pending command ack's or nack's)
+                    self.send_packet(SyncPacket())
+                    await self.synchronize()
+
+                    # fake a successful result to this command (BAD)
+                    f.set_result(PACKET_TYPE_BY_ID[command_type_id]())
+
+                    # fake a successful result to all pending commands (ALSO BAD)
+                    for (cc, ff) in self.command_futures:
+                        ff.set_result(PACKET_TYPE_BY_ID[cc]())
+                    self.command_futures.clear()
                 else:
                     f.set_result(packet)
 
@@ -454,10 +467,22 @@ class Connection():
                 if packet_type_id != command_type_id:
                     # we have a de-sync between commands and responses
                     # TODO: tear down and re-establish motion controller link
-                    f.set_exception(DesyncError)
+                    print(f'Desynced Ack Packet = {packet}, expected command = {command_type_id}')
+                    #f.set_exception(DesyncError)
+
+                    # ask for a sync packet (will discard results of any pending command ack's or nack's)
+                    self.send_packet(SyncPacket())
+                    await self.synchronize()
+
+                    # fake a successful result to this command (BAD)
+                    f.set_result(PACKET_TYPE_BY_ID[command_type_id]())
+
+                    # fake a successful result to all pending commands (ALSO BAD)
+                    for (cc, ff) in self.command_futures:
+                        ff.set_result(PACKET_TYPE_BY_ID[cc]())
+                    self.command_futures.clear()
                 else:
                     f.set_result(packet)
-
 
     async def start(self):
         self.reader, self.writer = await open_serial_connection(url=self.device, baudrate=self.baudrate)
