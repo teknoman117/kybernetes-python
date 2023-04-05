@@ -21,6 +21,7 @@ PACKET_TYPE_CONFIGURATION_GET = 0x11
 PACKET_TYPE_STEERING_SET = 0x20
 PACKET_TYPE_THROTTLE_SET_PWM = 0x30
 PACKET_TYPE_THROTTLE_SET_PID = 0x40
+PACKET_TYPE_CRAWL = 0x50
 PACKET_TYPE_SEND_ARM = 0xA0
 PACKET_TYPE_SEND_KEEPALIVE = 0xA1
 PACKET_TYPE_SEND_DISARM = 0xA2
@@ -36,6 +37,7 @@ STATE_MOVING_FORWARD_PWM = 0x30
 STATE_MOVING_FORWARD_PID = 0x31
 STATE_MOVING_BACKWARD_PWM = 0x40
 STATE_MOVING_BACKWARD_PID = 0x41
+STATE_CRAWLING_FORWARD = 0x50
 
 # Motion controller (kill controller) states
 KILL_SWITCH_STATE_DISARMED = 0
@@ -99,7 +101,7 @@ class StatusPacket(Structure):
         ("remote", KillSwitchStatusPacket),
         ("state", c_uint8),
         ("batteryLow", c_uint8),
-        ("align1", c_uint8),
+        ("bumperPressed", c_uint8),
         ("motion", PIDFrame),
     ]
 
@@ -108,6 +110,7 @@ class StatusPacket(Structure):
             remote={self.remote},
             state={self.state},
             batteryLow={self.batteryLow},
+            bumperPressed={self.bumperPressed},
             motion={self.motion}
         }}'''
     
@@ -173,6 +176,13 @@ class ThrottleSetPIDPacket(Structure):
     def __format__(self, spec):
         return f'ThrottleSetPIDPacket(target={self.target})'
 
+class CrawlPacket(Structure):
+    SEND_TYPE = PACKET_TYPE_CRAWL
+    _pack_ = 1
+    _fields_ = []
+    def __format__(self, spec):
+        return f'CrawlPacket()'
+
 class SendArmPacket(Structure):
     SEND_TYPE = PACKET_TYPE_SEND_ARM
     _pack_ = 1
@@ -230,6 +240,10 @@ class ThrottleSetPIDAckPacket(AckPacket):
     def __format__(self, spec):
         return f"ThrottleSetPIDAckPacket {{}}"
 
+class CrawlAckPacket(AckPacket):
+    def __format__(self, spec):
+        return f"CrawlAckPacket {{}}"
+
 class SendArmAckPacket(AckPacket):
     def __format__(self, spec):
         return f"SendArmAckPacket {{}}"
@@ -258,6 +272,7 @@ PACKET_TYPE_BY_ID = {
     PACKET_TYPE_STEERING_SET : SteeringSetAckPacket,
     PACKET_TYPE_THROTTLE_SET_PWM : ThrottleSetPWMAckPacket,
     PACKET_TYPE_THROTTLE_SET_PID : ThrottleSetPIDAckPacket,
+    PACKET_TYPE_CRAWL : CrawlAckPacket,
     PACKET_TYPE_SEND_ARM : SendArmAckPacket,
     PACKET_TYPE_SEND_KEEPALIVE : SendKeepaliveAckPacket,
     PACKET_TYPE_SEND_DISARM : SendDisarmAckPacket,
@@ -403,6 +418,10 @@ class Connection():
 
     async def set_throttle_pid(self, target=0):
         command = ThrottleSetPIDPacket(target = target)
+        return await self.send_command(command)
+
+    async def crawl(self):
+        command = CrawlPacket()
         return await self.send_command(command)
 
     # keepalive loop
