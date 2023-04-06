@@ -27,7 +27,7 @@ class App():
 
         while True:
             # Forward motion
-            print('arm self.controller to move forward')
+            print('arm controller to move forward')
             await self.controller.wait_until_armable()
             await self.controller.arm()
             print('moving forward')
@@ -56,4 +56,7 @@ class App():
 
 # run asynchronous app
 if __name__ == "__main__":
-    asyncio.run(App().run())
+    async def main():
+        await App().run()
+
+    asyncio.run(main())

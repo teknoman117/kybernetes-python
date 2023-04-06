@@ -1,11 +1,11 @@
-from asyncio import TimeoutError, get_event_loop, create_task, wait_for, Event
+from asyncio import TimeoutError, get_event_loop, create_task, wait_for, Event, Queue, QueueEmpty
 from crc8 import crc8
 from ctypes import c_uint8, c_uint16, c_int16, c_float, memmove, pointer, sizeof, Structure
 from serial_asyncio import open_serial_connection
 
 import time
 
-DEFAULT_BAUDRATE = 1000000
+DEFAULT_BAUDRATE = 250000
 DEFAULT_DEVICE = "/dev/motioncontroller"
 
 # Nack packet error types
@@ -295,12 +295,16 @@ class Connection():
         self.device = device
         self.baudrate = baudrate
         self.stop_requested = False
-        self.command_futures = []
         self.status_futures = []
         self.status = StatusPacket()
         self.armed_event = Event()
         self.disarmed_event = Event()
         self.idle_event = Event()
+
+        # set up queues for each type of command/response
+        self.command_future_queues = {}
+        for packet_type_id in PACKET_TYPE_BY_ID.keys():
+            self.command_future_queues[packet_type_id] = Queue()
 
     async def synchronize(self):
         while True:
@@ -347,12 +351,12 @@ class Connection():
         #print(f'[DEBUG {time.time()}] receive_packet: {packet}')
         return (pTypeId, packet)
 
-    async def send_command(self, packet):
+    async def send_command(self, packet, timeout=0.25):
         # this only works because motion controller processes commands in order
         f = get_event_loop().create_future()
-        self.command_futures.append((type(packet).SEND_TYPE, f))
+        self.command_future_queues[type(packet).SEND_TYPE].put_nowait(f)
         self.send_packet(packet)
-        return await f
+        return await wait_for(f, timeout=timeout)
 
     async def get_status(self):
         f = get_event_loop().create_future()
@@ -460,48 +464,22 @@ class Connection():
                 pass
 
             elif type(packet) is NackPacket:
-                (command_type_id, f) = self.command_futures.pop(0)
-                if packet.command_type_id != command_type_id:
-                    # we have a de-sync between commands and responses
-                    # TODO: cancel inflight transactions and resync
-                    print(f'Desynced Nack Packet = {packet}, expected command = {command_type_id}')
-                    #f.set_exception(DesyncError)
-
-                    # ask for a sync packet (will discard results of any pending command ack's or nack's)
-                    self.send_packet(SyncPacket())
-                    await self.synchronize()
-
-                    # fake a successful result to this command (BAD)
-                    f.set_result(PACKET_TYPE_BY_ID[command_type_id]())
-
-                    # fake a successful result to all pending commands (ALSO BAD)
-                    for (cc, ff) in self.command_futures:
-                        ff.set_result(PACKET_TYPE_BY_ID[cc]())
-                    self.command_futures.clear()
-                else:
+                # TODO: upon checksum errors, we should be resetting the interface
+                try:
+                    f = self.command_future_queues[packet.command_type_id].get_nowait()
                     f.set_result(packet)
+                    self.command_future_queues[packet.command_type_id].task_done()
+                except QueueEmpty:
+                    print(f'WARNING: future for {packet} not found')
 
             else:
-                (command_type_id, f) = self.command_futures.pop(0)
-                if packet_type_id != command_type_id:
-                    # we have a de-sync between commands and responses
-                    # TODO: tear down and re-establish motion controller link
-                    print(f'Desynced Ack Packet = {packet}, expected command = {command_type_id}')
-                    #f.set_exception(DesyncError)
-
-                    # ask for a sync packet (will discard results of any pending command ack's or nack's)
-                    self.send_packet(SyncPacket())
-                    await self.synchronize()
-
-                    # fake a successful result to this command (BAD)
-                    f.set_result(PACKET_TYPE_BY_ID[command_type_id]())
-
-                    # fake a successful result to all pending commands (ALSO BAD)
-                    for (cc, ff) in self.command_futures:
-                        ff.set_result(PACKET_TYPE_BY_ID[cc]())
-                    self.command_futures.clear()
-                else:
+                # TODO: upon checksum errors, we should be resetting the interface
+                try:
+                    f = self.command_future_queues[packet_type_id].get_nowait()
                     f.set_result(packet)
+                    self.command_future_queues[packet_type_id].task_done()
+                except QueueEmpty:
+                    print(f'WARNING: future for {packet} not found')
 
     async def start(self):
         self.reader, self.writer = await open_serial_connection(url=self.device, baudrate=self.baudrate)
