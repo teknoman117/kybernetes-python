@@ -13,10 +13,15 @@ import sys
 # thresholds
 hmin = 15
 hmax = 175
-smin = 160
+smin = 175
 smax = 255
-vmin = 160
+vmin = 175
 vmax = 255
+
+# debug mode
+debug = False
+if len(sys.argv) > 1 and sys.argv[1] == '--debug':
+    debug = True
 
 # Create pipeline
 pipeline = dai.Pipeline()
@@ -29,35 +34,28 @@ camRgb.setIspScale(1, 3)
 camRgb.setVideoSize(1280, 720)
 camRgb.setFps(30)
 
-# Color camera video encoder
-videoEnc = pipeline.create(dai.node.VideoEncoder)
-videoEnc.setDefaultProfilePreset(camRgb.getFps(), dai.VideoEncoderProperties.Profile.H265_MAIN)
-
 xoutVideo = pipeline.create(dai.node.XLinkOut)
 xoutVideo.setStreamName("video")
 xoutVideo.input.setBlocking(False)
 xoutVideo.input.setQueueSize(1)
 
-xoutVideoEnc = pipeline.create(dai.node.XLinkOut)
-xoutVideoEnc.setStreamName('h265')
-
-# Linking
 camRgb.video.link(xoutVideo.input)
-camRgb.video.link(videoEnc.input)
-videoEnc.bitstream.link(xoutVideoEnc.input)
 
-# debug mode?
-
-debug = False
-if len(sys.argv) > 1 and sys.argv[1] == '--debug':
-    debug = True
+# Video Encoders if not in debug mode
+if not debug:
+    videoEnc = pipeline.create(dai.node.VideoEncoder)
+    videoEnc.setDefaultProfilePreset(camRgb.getFps(), dai.VideoEncoderProperties.Profile.H265_MAIN)
+    xoutVideoEnc = pipeline.create(dai.node.XLinkOut)
+    xoutVideoEnc.setStreamName('h265')
+    camRgb.video.link(videoEnc.input)
+    videoEnc.bitstream.link(xoutVideoEnc.input)
 
 # Connect to device and start pipeline
 with dai.Device(pipeline, usb2Mode=True) as device:
+    video = device.getOutputQueue(name="video", maxSize=1, blocking=False)
 
-
-    video = device.getOutputQueue(name="video", maxSize=1, blocking=True)
-    bitstream = device.getOutputQueue(name='h265', maxSize=int(camRgb.getFps()), blocking=True)
+    if not debug:
+        bitstream = device.getOutputQueue(name='h265', maxSize=int(camRgb.getFps()), blocking=True)
 
     videoName = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_%Y-%m-%d_%H-%M-%S.h265')
     videoFile = open(videoName, "w")
@@ -69,29 +67,38 @@ with dai.Device(pipeline, usb2Mode=True) as device:
     lower2 = np.array([hmax, smin, vmin])
     upper2 = np.array([180, smax, vmax])
 
-    last_frame_time = time.time()
+    last_frame_time = time.time() - 1
     while True:
-        # write out video
-        while bitstream.has():
-            bitstream.get().getData().tofile(videoFile)
+        # no video encoder in debug mode
+        if not debug:
+            queues = ("video", "h265")
+        else:
+            queues = ("video")
+        queueName = device.getQueueEvent(queues)
+
+        # action based on which queue has results
+        if queueName == "h265":
+            # write out video
+            while bitstream.has():
+                bitstream.get().getData().tofile(videoFile)
+        elif queueName == "video":
+            pass
+        else:
+            continue
 
         # look for cone
-        videoIn = video.get()
+        frame = video.get().getCvFrame()
         frame_time = time.time()
-
-        print(f'fps = {1/(frame_time-last_frame_time)}')
+        fps = 1.0 / (frame_time - last_frame_time)
         last_frame_time = frame_time
 
-        frame = videoIn.getCvFrame()
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask1_raw = cv2.inRange(hsv, lower1, upper1)
         mask2_raw = cv2.inRange(hsv, lower2, upper2)
         mask_raw = cv2.bitwise_or(mask1_raw, mask2_raw)
         mask = cv2.morphologyEx(mask_raw, cv2.MORPH_OPEN, kernel)
 
-        #frame_masked = cv2.bitwise_and(frame, frame, mask=mask)
-        candidate = { 'found' : False }
-
+        candidate = { 'time' : frame_time, 'fps' : fps, 'found' : False }
         n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
         for i in range(1, n):
             x = stats[i, cv2.CC_STAT_LEFT]
@@ -107,7 +114,17 @@ with dai.Device(pipeline, usb2Mode=True) as device:
 
             # track the largest blob
             if not candidate['found'] or candidate['area'] < a:
-                candidate = { 'found' : True, 'time': frame_time, 'area' : int(a), 'x' : int(cX), 'y' : int(cY) }
+                candidate['found'] = True
+
+                candidate['area'] = int(a)
+                candidate['x'] = int(cX)
+                candidate['y'] = int(cY)
+
+                candidate['rect'] = {}
+                candidate['rect']['x'] = int(x)
+                candidate['rect']['y'] = int(y)
+                candidate['rect']['w'] = int(w)
+                candidate['rect']['h'] = int(h)
 
             # for debugging, draw blob bounds into the frame
             if debug:
@@ -116,10 +133,12 @@ with dai.Device(pipeline, usb2Mode=True) as device:
 
         print(f'{json.dumps(candidate)}', flush=True)
 
-        # display frame if in debug mode
         if debug:
+            # display frame if in debug mode
             cv2.imshow("mask", mask)
             cv2.imshow("frame", frame)
+
+            # exit on 'q' being pressed
             if cv2.waitKey(1) == ord('q'):
                 break
         else:
