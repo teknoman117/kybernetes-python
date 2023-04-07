@@ -9,6 +9,7 @@ import json
 import time
 import select
 import sys
+import math
 
 # thresholds
 hmin = 15
@@ -17,6 +18,9 @@ smin = 175
 smax = 255
 vmin = 175
 vmax = 255
+
+image_width = 1280
+image_height = 720
 
 # debug mode
 debug = False
@@ -31,7 +35,7 @@ camRgb = pipeline.create(dai.node.ColorCamera)
 camRgb.setBoardSocket(dai.CameraBoardSocket.RGB)
 camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
 camRgb.setIspScale(1, 3)
-camRgb.setVideoSize(1280, 720)
+camRgb.setVideoSize(image_width, image_height)
 camRgb.setFps(30)
 
 xoutVideo = pipeline.create(dai.node.XLinkOut)
@@ -66,6 +70,13 @@ with dai.Device(pipeline, usb2Mode=True) as device:
     upper1 = np.array([hmin, smax, vmax])
     lower2 = np.array([hmax, smin, vmin])
     upper2 = np.array([180, smax, vmax])
+    
+    calib = device.readCalibration()
+    intrinsics = calib.getCameraIntrinsics(dai.CameraBoardSocket.RGB, dai.Size2f(image_width, image_height))
+    
+    hfov =  2 * 180 / (math.pi) * math.atan(image_width * 0.5 / intrinsics[0][0])
+    
+    print(f'hfov = {hfov}')
 
     last_frame_time = time.time() - 1
     while True:
@@ -98,7 +109,7 @@ with dai.Device(pipeline, usb2Mode=True) as device:
         mask_raw = cv2.bitwise_or(mask1_raw, mask2_raw)
         mask = cv2.morphologyEx(mask_raw, cv2.MORPH_OPEN, kernel)
 
-        candidate = { 'time' : frame_time, 'fps' : fps, 'found' : False }
+        candidate = { 'time' : frame_time, 'fps' : fps, 'found' : False, 'iw' : image_width, 'ih' : image_height }
         n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
         for i in range(1, n):
             x = stats[i, cv2.CC_STAT_LEFT]

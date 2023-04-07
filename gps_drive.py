@@ -85,8 +85,8 @@ class App():
         await self.controller.set_configuration(\
             deadzone_forward = 1525,
             deadzone_backward = 1475,
-            deadzone_left = 1580,
-            deadzone_right = 1580,
+            deadzone_left = 1525,
+            deadzone_right = 1525,
             Kp = 0.15,
             Ki = 0.25,
             Kd = 0.01
