@@ -76,7 +76,7 @@ with dai.Device(pipeline, usb2Mode=True) as device:
     
     hfov =  2 * 180 / (math.pi) * math.atan(image_width * 0.5 / intrinsics[0][0])
     
-    print(f'hfov = {hfov}')
+    #print(f'hfov = {hfov}')
 
     last_frame_time = time.time() - 1
     while True:
