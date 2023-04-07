@@ -60,16 +60,7 @@ class PIDFrame(Structure):
     ]
 
     def __format__(self, spec):
-        return f'''PIDFrame {{
-            Enabled={self.Enabled},
-            Input=({self.Input[0]}, {self.Input[1]}, {self.Input[2]}),
-            Target={self.Target},
-            Output={self.Output},
-            e={self.e},
-            pTerm={self.pTerm},
-            iTerm={self.iTerm},
-            dTerm={self.dTerm}
-        }}'''
+        return f'PIDFrame(Enabled={self.Enabled}, Input=({self.Input[0]}, {self.Input[1]}, {self.Input[2]}), Target={self.Target}, Output={self.Output}, e={self.e}, pTerm={self.pTerm}, iTerm={self.iTerm}, dTerm={self.dTerm})'
 
 class KillSwitchStatusPacket(Structure):
     _pack_ = 1
@@ -84,14 +75,7 @@ class KillSwitchStatusPacket(Structure):
     ]
 
     def __format__(self, spec):
-        return f'''KillSwitchStatusPacket {{
-            servoSteeringInput={self.servoSteeringInput},
-            servoThrottleInput={self.servoThrottleInput},
-            servoSteeringInputUpdated={self.servoSteeringInputUpdated},
-            servoThrottleInputUpdated={self.servoThrottleInputUpdated},
-            armable={self.armable},
-            state={self.state},
-        }}'''
+        return f'KillSwitchStatusPacket(steering_input={self.servoSteeringInput}, throttle_input={self.servoThrottleInput}, steering_updated={self.servoSteeringInputUpdated}, throttle_updated={self.servoThrottleInputUpdated}, armable={self.armable}, state={self.state})'
 
 class StatusPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_STATUS
@@ -106,13 +90,7 @@ class StatusPacket(Structure):
     ]
 
     def __format__(self, spec):
-        return f'''StatusPacket {{
-            remote={self.remote},
-            state={self.state},
-            batteryLow={self.batteryLow},
-            bumperPressed={self.bumperPressed},
-            motion={self.motion}
-        }}'''
+        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, motion={self.motion})'
     
     def armed(self):
         return self.remote.state == KILL_SWITCH_STATE_ARMED
@@ -133,15 +111,7 @@ class ConfigurationPacket(Structure):
     ]
 
     def __format__(self, spec):
-        return f'''ConfigurationPacket {{
-            deadzone_left={self.deadzone_left},
-            deadzone_right={self.deadzone_right},
-            deadzone_forward={self.deadzone_forward},
-            deadzone_backward={self.deadzone_backward},
-            Kp={self.Kp},
-            Ki={self.Ki},
-            Kd={self.Kd}
-        }}'''
+        return f'ConfigurationPacket(deadzone_left={self.deadzone_left}, deadzone_right={self.deadzone_right}, deadzone_forward={self.deadzone_forward}, deadzone_backward={self.deadzone_backward}, Kp={self.Kp}, Ki={self.Ki}, Kd={self.Kd})'
 
 class SteeringSetPacket(Structure):
     SEND_TYPE = PACKET_TYPE_STEERING_SET
@@ -264,7 +234,7 @@ class NackPacket(Structure):
     ]
 
     def __format__(self, spec):
-        return f'''NackPacket {{command_type_id={self.command_type_id}, failure_type_id={self.failure_type_id}}}'''
+        return f'NackPacket(command_type_id={self.command_type_id}, failure_type_id={self.failure_type_id})'
 
 PACKET_TYPE_BY_ID = {
     PACKET_TYPE_CONFIGURATION_SET : ConfigurationSetAckPacket,
