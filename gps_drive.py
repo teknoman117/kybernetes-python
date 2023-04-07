@@ -60,9 +60,9 @@ class App():
 
             # if we're close to the target, switch to the next one
             if self.distance_to_target > 7:
-                self.speed_to_target = 400
+                self.speed_to_target = 4
             elif self.distance_to_target > 1:
-                self.speed_to_target = 100
+                self.speed_to_target = 1
             else:
                 self.tid = self.tid + 1
                 if self.tid >= len(self.targets):

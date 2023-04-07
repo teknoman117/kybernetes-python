@@ -46,6 +46,14 @@ KILL_SWITCH_STATE_DISARMING_REMOTE = 2
 KILL_SWITCH_STATE_DISARMING_SOFTWARE_TIMEOUT = 3
 KILL_SWITCH_STATE_ARMED = 4
 
+# Physical Properties
+WHEEL_CIRCUMFERENCE = 0.479
+ENCODER_RATIO = 5.2175 / 1.0
+ENCODER_TICKS_PER_REVOLUTION = 400
+PID_HZ = 50
+TICKS_PER_METER = ENCODER_RATIO * ENCODER_TICKS_PER_REVOLUTION / WHEEL_CIRCUMFERENCE
+METERS_PER_SECOND_TO_TARGET = TICKS_PER_METER / PID_HZ
+
 class PIDFrame(Structure):
     _pack_ = 1
     _fields_ = [
@@ -391,7 +399,9 @@ class Connection():
         return await self.send_command(command)
 
     async def set_throttle_pid(self, target=0):
-        command = ThrottleSetPIDPacket(target = target)
+        ticks = int(target * METERS_PER_SECOND_TO_TARGET)
+        print(f'setting pid = {ticks}')
+        command = ThrottleSetPIDPacket(target = ticks)
         return await self.send_command(command)
 
     async def crawl(self):

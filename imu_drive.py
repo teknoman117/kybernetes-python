@@ -101,7 +101,7 @@ class App():
                 else:
                     # otherwise update speed
                     self.active = True
-                    await self.controller.set_throttle_pid(25)
+                    await self.controller.set_throttle_pid(0.33)
 
         await self.controller.set_throttle_pid(0)
 
