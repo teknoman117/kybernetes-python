@@ -16,6 +16,7 @@ DRIVE_STEERING_KP = 50
 DRIVE_THROTTLE_KP = 0.75
 ALIGN_STEERING_KP = 100
 ALIGN_THROTTLE_KP = 1.0 / 10.0
+MOVETO_STEERING_KP = 25
 
 MINIMUM_VELOCITY = 0.3
 
@@ -198,6 +199,69 @@ class ContactCone(Task):
         print(f'[{time.time()}] ContactCone.stop()', flush=True)
         await self.app.controller.set_throttle_pwm(0)
         self.stopping = True
+
+class MoveTo(Task):
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+    def __init__(self, app, target, velocity, should_stop=True):
+        self.app = app
+        self.target = target
+        self.velocity = velocity
+        self.should_stop = should_stop
+        self.heading_to_target = 0
+        self.stopping = False
+
+    async def on_enter(self):
+        print(f'[{time.time()}] MoveTo.on_enter()', flush=True)
+
+    async def on_exit(self):
+        print(f'[{time.time()}] MoveTo.on_exit()', flush=True)
+
+    async def on_imu(self, orientation, heading):
+        if self.stopping:
+            return
+
+        error = -normalize_heading(self.heading_to_target - heading)
+        response = int(MOVETO_STEERING_KP * error)
+        print(f'[{time.time()}] MoveTo.on_imu(): heading error = {error}')
+        await self.app.controller.set_steering(response)
+
+    async def on_gps(self, position):
+        if self.stopping:
+            return
+
+        self.heading_to_target = position.get_heading_to(self.target, magnetic=False)
+        distance = position.get_distance_to(self.target)
+        print(f'[{time.time()}] MoveTo.on_gps(): heading to target = {self.heading_to_target}, distance to target = {distance}')
+
+        # slow down as we approach the target
+        if distance > 7:
+            speed = clamp(self.velocity, MINIMUM_VELOCITY, self.velocity)
+            await self.app.controller.set_throttle_pid(speed)
+        elif distance > 1:
+            speed = clamp(self.velocity/4, MINIMUM_VELOCITY, self.velocity)
+            await self.app.controller.set_throttle_pid(speed)
+        else:
+            await self.stop()
+
+    async def on_camera(self, fix):
+        pass
+
+    async def on_status(self, status):
+        # wait until our motion ceases before calling task_done()
+        if self.stopping:
+            if status.stopped():
+                await self.app.task_done()
+            return
+
+    async def stop(self):
+        print(f'[{time.time()}] MoveTo.stop()', flush=True)
+        if self.should_stop:
+            await self.app.controller.set_throttle_pwm(0)
+            self.stopping = True
+        else:
+            await self.app.task_done()
 
 class App():
     def __new__(cls, *args, **kwargs):
