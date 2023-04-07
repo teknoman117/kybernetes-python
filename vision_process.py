@@ -4,6 +4,7 @@ import cv2
 import depthai as dai
 import numpy as np
 
+import datetime
 import json
 import time
 import select
@@ -20,23 +21,30 @@ vmax = 255
 # Create pipeline
 pipeline = dai.Pipeline()
 
-# Define source and output
+# Color camera
 camRgb = pipeline.create(dai.node.ColorCamera)
-xoutVideo = pipeline.create(dai.node.XLinkOut)
-
-xoutVideo.setStreamName("video")
-
-# Properties
 camRgb.setBoardSocket(dai.CameraBoardSocket.RGB)
 camRgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
 camRgb.setIspScale(1, 3)
 camRgb.setVideoSize(1280, 720)
+camRgb.setFps(30)
 
+# Color camera video encoder
+videoEnc = pipeline.create(dai.node.VideoEncoder)
+videoEnc.setDefaultProfilePreset(camRgb.getFps(), dai.VideoEncoderProperties.Profile.H265_MAIN)
+
+xoutVideo = pipeline.create(dai.node.XLinkOut)
+xoutVideo.setStreamName("video")
 xoutVideo.input.setBlocking(False)
 xoutVideo.input.setQueueSize(1)
 
+xoutVideoEnc = pipeline.create(dai.node.XLinkOut)
+xoutVideoEnc.setStreamName('h265')
+
 # Linking
 camRgb.video.link(xoutVideo.input)
+camRgb.video.link(videoEnc.input)
+videoEnc.bitstream.link(xoutVideoEnc.input)
 
 # debug mode?
 
@@ -45,9 +53,14 @@ if len(sys.argv) > 1 and sys.argv[1] == '--debug':
     debug = True
 
 # Connect to device and start pipeline
-with dai.Device(pipeline, usb2Mode=False) as device:
+with dai.Device(pipeline, usb2Mode=True) as device:
 
-    video = device.getOutputQueue(name="video", maxSize=1, blocking=False)
+
+    video = device.getOutputQueue(name="video", maxSize=1, blocking=True)
+    bitstream = device.getOutputQueue(name='h265', maxSize=int(camRgb.getFps()), blocking=True)
+
+    videoName = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_%Y-%m-%d_%H-%M-%S.h265')
+    videoFile = open(videoName, "w")
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, [5, 5])
 
@@ -56,10 +69,20 @@ with dai.Device(pipeline, usb2Mode=False) as device:
     lower2 = np.array([hmax, smin, vmin])
     upper2 = np.array([180, smax, vmax])
 
+    last_frame_time = time.time()
     while True:
-        videoIn = video.get()
-        frame = videoIn.getCvFrame()
+        # write out video
+        while bitstream.has():
+            bitstream.get().getData().tofile(videoFile)
 
+        # look for cone
+        videoIn = video.get()
+        frame_time = time.time()
+
+        print(f'fps = {1/(frame_time-last_frame_time)}')
+        last_frame_time = frame_time
+
+        frame = videoIn.getCvFrame()
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask1_raw = cv2.inRange(hsv, lower1, upper1)
         mask2_raw = cv2.inRange(hsv, lower2, upper2)
@@ -67,9 +90,7 @@ with dai.Device(pipeline, usb2Mode=False) as device:
         mask = cv2.morphologyEx(mask_raw, cv2.MORPH_OPEN, kernel)
 
         #frame_masked = cv2.bitwise_and(frame, frame, mask=mask)
-        
         candidate = { 'found' : False }
-        frame_time = time.time()
 
         n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
         for i in range(1, n):
@@ -79,7 +100,7 @@ with dai.Device(pipeline, usb2Mode=False) as device:
             h = stats[i, cv2.CC_STAT_HEIGHT]
             a = stats[i, cv2.CC_STAT_AREA]
             (cX, cY) = centroids[i]
-            
+
             # reject too small regions
             if a < 100:
                 continue
@@ -87,7 +108,7 @@ with dai.Device(pipeline, usb2Mode=False) as device:
             # track the largest blob
             if not candidate['found'] or candidate['area'] < a:
                 candidate = { 'found' : True, 'time': frame_time, 'area' : int(a), 'x' : int(cX), 'y' : int(cY) }
-            
+
             # for debugging, draw blob bounds into the frame
             if debug:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 3)
