@@ -8,6 +8,8 @@ import math
 DEFAULT_DEVICE = "/dev/gps"
 
 class Position():
+    EARTH = 6371009.0
+
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls)
     
@@ -21,7 +23,7 @@ class Position():
     def __format__(self, spec):
         return f'Position(latitude={self.latitude}, longitude={self.longitude}, declination={self.declination})'
     
-    def get_distance_to(self, position, R = 6371009.0):
+    def get_distance_to(self, position, R = EARTH):
         phi1 = math.radians(self.latitude)
         phi2 = math.radians(position.latitude)
         dPhi_2 = (phi2 - phi1) / 2.0
@@ -44,6 +46,21 @@ class Position():
             d = normalize_heading(d - self.declination)
         return d
 
+    def offset(self, heading, distance, R = EARTH):
+        def mod(y, x):
+            return y - x * math.floor(y/x)
+
+        lat1 = math.radians(self.latitude)
+        lon1 = math.radians(self.longitude)
+        tc = -math.radians(heading)
+        d = distance / R
+
+        lat = math.asin(math.sin(lat1) * math.cos(d) + math.cos(lat1) * math.sin(d) * math.cos(tc))
+        dlon = math.atan2(math.sin(tc) * math.sin(d) * math.cos(lat1), math.cos(d) - math.sin(lat1) * math.sin(lat))
+        lon = mod(lon1 - dlon + math.pi, 2*math.pi) - math.pi
+
+        return Position(latitude = math.degrees(lat), longitude = math.degrees(lon))
+
     def get_latitude(self):
         return self.latitude
     
@@ -55,7 +72,6 @@ class Position():
 
     def get_error(self):
         return self.epx, self.epy
-        
 
 # super basic gpsd client that just scrapes position data
 class Connection():
