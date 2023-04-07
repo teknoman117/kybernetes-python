@@ -25,6 +25,7 @@ PACKET_TYPE_CRAWL = 0x50
 PACKET_TYPE_SEND_ARM = 0xA0
 PACKET_TYPE_SEND_KEEPALIVE = 0xA1
 PACKET_TYPE_SEND_DISARM = 0xA2
+PACKET_TYPE_RESET_ODOMETER = 0xB0
 PACKET_TYPE_STATUS = 0xD0
 PACKET_TYPE_NACK = 0xE0
 PACKET_TYPE_SYNC = 0xFF
@@ -47,8 +48,8 @@ KILL_SWITCH_STATE_DISARMING_SOFTWARE_TIMEOUT = 3
 KILL_SWITCH_STATE_ARMED = 4
 
 # Physical Properties
-WHEEL_CIRCUMFERENCE = 0.479
-ENCODER_RATIO = 5.2175 / 1.0
+WHEEL_CIRCUMFERENCE = 0.4825
+ENCODER_RATIO = 5.22 / 1.0
 ENCODER_TICKS_PER_REVOLUTION = 400
 PID_HZ = 50
 TICKS_PER_METER = ENCODER_RATIO * ENCODER_TICKS_PER_REVOLUTION / WHEEL_CIRCUMFERENCE
@@ -94,14 +95,19 @@ class StatusPacket(Structure):
         ("state", c_uint8),
         ("batteryLow", c_uint8),
         ("bumperPressed", c_uint8),
+        ("odometer", c_int16),
+        ("unused1", c_uint16),
         ("motion", PIDFrame),
     ]
 
     def __format__(self, spec):
-        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, motion={self.motion})'
-    
+        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion})'
+
     def armed(self):
         return self.remote.state == KILL_SWITCH_STATE_ARMED
+
+    def stopped(self):
+        return self.state == STATE_STOPPED or not self.armed()
 
 class ConfigurationPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_CONFIGURATION_GET
@@ -182,6 +188,13 @@ class SendDisarmPacket(Structure):
     def __format__(self, spec):
         return 'SendDisarmPacket()'
 
+class ResetOdometerPacket(Structure):
+    SEND_TYPE = PACKET_TYPE_RESET_ODOMETER
+    _pack_ = 1
+    _fields_ = []
+    def __format__(self, spec):
+        return 'ResetOdometerPacket()'
+
 class ConfigurationGetCommand(Structure):
     SEND_TYPE = PACKET_TYPE_CONFIGURATION_GET
     _pack_ = 1
@@ -234,6 +247,10 @@ class SendDisarmAckPacket(AckPacket):
     def __format__(self, spec):
         return f"SendDisarmAckPacket {{}}"
 
+class ResetOdometerAckPacket(AckPacket):
+    def __format__(self, spec):
+        return f"ResetOdometerAckPacket {{}}"
+
 class NackPacket(Structure):
     _pack_ = 1
     _fields_ = [
@@ -254,6 +271,7 @@ PACKET_TYPE_BY_ID = {
     PACKET_TYPE_SEND_ARM : SendArmAckPacket,
     PACKET_TYPE_SEND_KEEPALIVE : SendKeepaliveAckPacket,
     PACKET_TYPE_SEND_DISARM : SendDisarmAckPacket,
+    PACKET_TYPE_RESET_ODOMETER : ResetOdometerAckPacket,
     PACKET_TYPE_STATUS : StatusPacket,
     PACKET_TYPE_NACK : NackPacket,
     PACKET_TYPE_SYNC : SyncPacket
@@ -400,12 +418,15 @@ class Connection():
 
     async def set_throttle_pid(self, target=0):
         ticks = int(target * METERS_PER_SECOND_TO_TARGET)
-        print(f'setting pid = {ticks}')
         command = ThrottleSetPIDPacket(target = ticks)
         return await self.send_command(command)
 
     async def crawl(self):
         command = CrawlPacket()
+        return await self.send_command(command)
+
+    async def reset_odometer(self):
+        command = ResetOdometerPacket()
         return await self.send_command(command)
 
     # keepalive loop
