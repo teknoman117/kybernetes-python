@@ -14,8 +14,8 @@ class Task():
 
 DRIVE_STEERING_KP = 50
 DRIVE_THROTTLE_KP = 0.75
-ALIGN_STEERING_KP = 50
-ALIGN_THROTTLE_KP = 1.0 / 22.5
+ALIGN_STEERING_KP = 100
+ALIGN_THROTTLE_KP = 1.0 / 10.0
 
 MINIMUM_VELOCITY = 0.3
 
@@ -78,6 +78,7 @@ class Drive(Task):
         await self.app.controller.set_throttle_pid(response)
 
     async def stop(self):
+        print(f'[{time.time()}] Drive.stop()', flush=True)
         await self.app.controller.set_throttle_pwm(0)
         self.stopping = True
 
@@ -85,10 +86,11 @@ class Align(Task):
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls)
 
-    def __init__(self, app, heading, velocity):
+    def __init__(self, app, heading, velocity, should_stop=True):
         self.app = app
         self.heading = heading
         self.velocity = velocity
+        self.should_stop = should_stop
 
         # internal state
         self.stopping = False
@@ -101,8 +103,18 @@ class Align(Task):
 
     async def on_imu(self, orientation, heading):
         error = -normalize_heading(self.heading - heading)
+        print(f'[{time.time()}] Align.on_imu(): heading error = {error}', flush=True)
+
+        if self.stopping:
+            return
+
         steering_response = int(ALIGN_STEERING_KP * error)
-        throttle_response = clamp(ALIGN_THROTTLE_KP * error, MINIMUM_VELOCITY, abs(self.velocity))
+        if self.should_stop:
+            throttle_response = clamp(ALIGN_THROTTLE_KP * error, MINIMUM_VELOCITY, abs(self.velocity))
+        else:
+            # if we don't need to stop, just run at target velocity
+            throttle_response = abs(self.velocity)
+
         if abs(error) < 2.5:
             await self.stop()
             return
@@ -128,30 +140,68 @@ class Align(Task):
             return
 
     async def stop(self):
+        print(f'[{time.time()}] Align.stop()', flush=True)
+        if self.should_stop:
+            await self.app.controller.set_throttle_pwm(0)
+            self.stopping = True
+        else:
+            await self.app.task_done()
+
+class ContactCone(Task):
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+    def __init__(self, app):
+        self.app = app
+        self.stopping = False
+
+    async def on_enter(self):
+        print(f'[{time.time()}] ContactCone.on_enter()', flush=True)
+
+    async def on_exit(self):
+        print(f'[{time.time()}] ContactCone.on_exit()', flush=True)
+
+    async def on_imu(self, orientation, heading):
+        pass
+
+    async def on_gps(self, position):
+        pass
+
+    async def on_camera(self, fix):
+        if self.stopping:
+            return
+
+        if fix is None:
+            print(f'[{time.time()}] ContactCone.on_camera(): lost fix, aborting')
+            await self.stop()
+            return
+
+        error = fix.x - 640
+        print(f'[{time.time()}] ContactCone.on_camera(): centering error = {error}')
+        await self.app.controller.set_steering(-error * 2)
+
+    async def on_status(self, status):
+        # wait until our motion ceases before calling task_done()
+        if self.stopping:
+            if status.stopped():
+                await self.app.task_done()
+            return
+
+        # if the bumper is pressed, we contacted the cone!
+        if status.bumperPressed != 0:
+            print(f'[{time.time()}] ContactCone.on_status(): Cone Contacted', flush=True)
+            await self.stop()
+        else:
+            await self.app.controller.crawl()
+
+    async def stop(self):
+        print(f'[{time.time()}] ContactCone.stop()', flush=True)
         await self.app.controller.set_throttle_pwm(0)
         self.stopping = True
 
 class App():
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls)
-
-    def __init__(self):
-        self.controller = MotionController.Connection()
-        self.gps = GPS.Connection()
-        self.imu = IMU.Connection()
-        self.camera = Camera.Connection()
-
-        # tasks to perform for this run
-        self.completed = False
-        self.active = False
-        self.active_task = None
-        self.tid = 0
-        self.tasks = [\
-            Drive(self, distance = 1, heading = 0, velocity = 1),
-            Align(self, heading = 90, velocity = 1),
-            Align(self, heading = 180, velocity = -1),
-            Drive(self, distance = 1.75, heading = 180, velocity = 1),
-        ]
 
     async def imu_task(self):
         # get one IMU measurement to know our starting heading
@@ -177,8 +227,6 @@ class App():
     async def camera_task(self):
         while not self.completed:
             fix = await self.camera.get_fix()
-            if fix is None:
-                continue
             print(f'[{time.time()}] fix = {fix}', flush=True)
 
             if self.active_task is not None:
@@ -265,6 +313,46 @@ class App():
         await self.gps.stop()
         await self.imu.stop()
         await self.controller.stop()
+
+    def __init__(self):
+        self.controller = MotionController.Connection()
+        self.gps = GPS.Connection()
+        self.imu = IMU.Connection()
+        self.camera = Camera.Connection()
+
+        # tasks to perform for this run
+        self.completed = False
+        self.active = False
+        self.active_task = None
+        self.tid = 0
+        self.tasks = [\
+            # Go to forward left of cone
+            #Align(self, heading = -30, velocity = -0.5),
+            #Drive(self, heading = -30, velocity = 0.5, distance = 1.0),
+            #Align(self, heading = 0, velocity = 0.5),
+            
+            # Go to forward right of cone
+            #Align(self, heading = 30, velocity = -0.5),
+            #Drive(self, heading = 30, velocity = 0.5, distance = 1.0),
+            #Align(self, heading = 0, velocity = 0.5),
+            
+            # Boop Cone
+            ContactCone(self),
+            Drive(self, heading = 0, velocity = -0.5, distance = -0.5),
+
+            # Multi-point turn,
+            Align(self, heading = -30, velocity = -0.5),
+            Align(self, heading = -60, velocity = 0.5),
+            Align(self, heading = -90, velocity = -0.5),
+            Align(self, heading = -120, velocity = 0.5),
+            Align(self, heading = -150, velocity = -0.5),
+            Align(self, heading = -180, velocity = 0.5),
+    
+            # Go to forward right of cone
+            #Align(self, heading = 30, velocity = -0.5),
+            #Drive(self, heading = 30, velocity = 0.5, distance = 1.0),
+            #Align(self, heading = 0, velocity = 0.5),
+        ]
 
 # run asynchronous app
 if __name__ == "__main__":
