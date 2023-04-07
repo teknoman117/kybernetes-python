@@ -1,6 +1,6 @@
 from asyncio import TimeoutError, get_event_loop, create_task, wait_for, Event, Queue, QueueEmpty
 from crc8 import crc8
-from ctypes import c_uint8, c_uint16, c_int16, c_float, memmove, pointer, sizeof, Structure
+from ctypes import c_uint8, c_uint16, c_int16, c_int32, c_float, memmove, pointer, sizeof, Structure
 from serial_asyncio import open_serial_connection
 
 import time
@@ -95,8 +95,7 @@ class StatusPacket(Structure):
         ("state", c_uint8),
         ("batteryLow", c_uint8),
         ("bumperPressed", c_uint8),
-        ("odometer", c_int16),
-        ("unused1", c_uint16),
+        ("odometer", c_int32),
         ("motion", PIDFrame),
     ]
 
