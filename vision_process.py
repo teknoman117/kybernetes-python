@@ -14,9 +14,9 @@ import math
 # thresholds
 hmin = 15
 hmax = 175
-smin = 175
+smin = 150
 smax = 255
-vmin = 175
+vmin = 150
 vmax = 255
 
 image_width = 1280

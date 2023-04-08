@@ -247,6 +247,70 @@ class ContactCone(Task):
         print(f'[{time.time()}] ContactCone.stop()', flush=True)
         await self.app.controller.set_throttle_pwm(0)
         self.stopping = True
+        
+class FindCone(Task):
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+    def __init__(self, app, done):
+        self.app = app
+        self.done = done
+        self.cumulative_heading = 0
+        self.previous_heading = None
+        self.stopping = False
+
+    async def on_enter(self):
+        print(f'[{time.time()}] FindCone.on_enter()', flush=True)
+
+    async def on_exit(self):
+        print(f'[{time.time()}] FindCone.on_exit()', flush=True)
+
+    async def on_imu(self, orientation, heading):
+        if self.stopping:
+            return
+
+        # figure out how much we've turned in the last cycle
+        if self.previous_heading is None:
+            self.previous_heading = heading
+        delta = normalize_heading(heading - self.previous_heading)
+        self.cumulative_heading = self.cumulative_heading + delta
+        self.previous_heading = heading
+        
+        print(f'[{time.time()}] FindCone.on_imu(): total rotation = {self.cumulative_heading}', flush=True)
+        
+        # abort on full rotation
+        if abs(self.cumulative_heading) >= 360:
+            print(f'[{time.time()}] FindCone.on_imu(): Failed to acquired fix', flush=True)
+            await self.stop()
+
+    async def on_gps(self, position):
+        pass
+
+    async def on_camera(self, fix):
+        if self.stopping:
+            return
+
+        if fix is not None:
+            print(f'[{time.time()}] FindCone.on_camera(): Acquired fix', flush=True)
+            await self.stop()
+            return
+
+    async def on_status(self, status):
+        # wait until our motion ceases before calling task_done()
+        if self.stopping:
+            if status.stopped():
+                await self.done()
+            return
+
+        await self.app.controller.set_steering(500)
+        await self.app.controller.set_throttle_pid(0.5)
+
+    async def stop(self):
+        print(f'[{time.time()}] FindCone.stop()', flush=True)
+        r = await self.app.controller.set_throttle_pid(0)
+        print(f'[{time.time()}] FindCone.stop() controller response = {r}', flush=True)
+        #self.stopping = True
+        await self.done()
 
 class MoveTo(Task):
     def __new__(cls, *args, **kwargs):
@@ -285,7 +349,7 @@ class MoveTo(Task):
         print(f'[{time.time()}] MoveTo.on_gps(): heading to target = {self.heading_to_target}, distance to target = {distance}')
 
         # slow down as we approach the target
-        if distance > 7:
+        if distance > 3 or (not self.should_stop and distance > 1):
             speed = clamp(self.velocity, MINIMUM_VELOCITY, self.velocity)
             await self.app.controller.set_throttle_pid(speed)
         elif distance > 1:
@@ -503,9 +567,20 @@ class App():
         self.active_task = None
         self.tid = 0
         self.tasks = [\
-            #MoveTo(self, target = GPS.Position(latitude=37.7649689, longitude=-122.4765852).offset(heading=180, distance=1), velocity = 0.5, should_stop=True),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.76968, longitude=-122.48330), velocity = 2, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.76965, longitude=-122.48363).offset(heading=180, distance=1), velocity = 2, should_stop=True),
+            FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
-            MovePastRight(self, self.task_done),
+            #TurnAround(self, self.task_done),
+            Align(self, self.task_done, heading = 90, velocity = -1.0),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.76968, longitude=-122.48330), velocity = 2, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.76970, longitude=-122.48288).offset(heading=-90, distance=3), velocity = 2, should_stop=False),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            #TurnAround(self, self.task_done),
+            Align(self, self.task_done, heading = -90, velocity = -1.0),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.76968, longitude=-122.48330), velocity = 2, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.76968, longitude=-122.48330).offset(heading=180, distance=15), velocity = 2, should_stop=True),
         ]
 
 # run asynchronous app
