@@ -45,6 +45,32 @@ xoutVideo.input.setQueueSize(1)
 
 camRgb.video.link(xoutVideo.input)
 
+# Create left/right mono cameras for Stereo depth
+monoLeft = pipeline.create(dai.node.MonoCamera)
+monoLeft.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+monoLeft.setBoardSocket(dai.CameraBoardSocket.LEFT)
+
+monoRight = pipeline.create(dai.node.MonoCamera)
+monoRight.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+monoRight.setBoardSocket(dai.CameraBoardSocket.RIGHT)
+
+# Create a node that will produce the depth map
+depth = pipeline.create(dai.node.StereoDepth)
+depth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+depth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
+depth.setLeftRightCheck(True)
+depth.setExtendedDisparity(False)
+# Subpixel disparity is of UINT16 format, which is unsupported by VideoEncoder
+depth.setSubpixel(False)
+monoLeft.out.link(depth.left)
+monoRight.out.link(depth.right)
+
+# Colormap
+colormap = pipeline.create(dai.node.ImageManip)
+colormap.initialConfig.setColormap(dai.Colormap.TURBO, depth.initialConfig.getMaxDisparity())
+colormap.initialConfig.setFrameType(dai.ImgFrame.Type.NV12)
+depth.disparity.link(colormap.inputImage)
+    
 # Video Encoders if not in debug mode
 if not debug:
     videoEnc = pipeline.create(dai.node.VideoEncoder)
@@ -53,6 +79,14 @@ if not debug:
     xoutVideoEnc.setStreamName('h265')
     camRgb.video.link(videoEnc.input)
     videoEnc.bitstream.link(xoutVideoEnc.input)
+    
+    videoEncDepth = pipeline.create(dai.node.VideoEncoder)
+    videoEncDepth.setDefaultProfilePreset(monoLeft.getFps(), dai.VideoEncoderProperties.Profile.H264_HIGH)
+    
+    colormap.out.link(videoEncDepth.input)
+    xoutVideoEncDepth = pipeline.create(dai.node.XLinkOut)
+    xoutVideoEncDepth.setStreamName('h264')
+    videoEncDepth.bitstream.link(xoutVideoEncDepth.input)
 
 # Connect to device and start pipeline
 with dai.Device(pipeline, usb2Mode=True) as device:
@@ -60,9 +94,12 @@ with dai.Device(pipeline, usb2Mode=True) as device:
 
     if not debug:
         bitstream = device.getOutputQueue(name='h265', maxSize=int(camRgb.getFps()), blocking=True)
+        bitstreamDepth = device.getOutputQueue(name='h264', maxSize=int(monoLeft.getFps()), blocking=True)
 
     videoName = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_%Y-%m-%d_%H-%M-%S.h265')
+    videoNameDepth = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_depth_%Y-%m-%d_%H-%M-%S.h264')
     videoFile = open(videoName, "w")
+    videoFileDepth = open(videoNameDepth, "w")
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, [5, 5])
 
@@ -82,7 +119,7 @@ with dai.Device(pipeline, usb2Mode=True) as device:
     while True:
         # no video encoder in debug mode
         if not debug:
-            queues = ("video", "h265")
+            queues = ("video", "h265", "h264")
         else:
             queues = ("video")
         queueName = device.getQueueEvent(queues)
@@ -92,6 +129,10 @@ with dai.Device(pipeline, usb2Mode=True) as device:
             # write out video
             while bitstream.has():
                 bitstream.get().getData().tofile(videoFile)
+        elif queueName == "h264":
+            # write out depth video
+            while bitstreamDepth.has():
+                bitstreamDepth.get().getData().tofile(videoFileDepth)
         elif queueName == "video":
             pass
         else:
