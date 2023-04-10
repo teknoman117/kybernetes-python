@@ -65,8 +65,22 @@ depth.setSubpixel(False)
 monoLeft.out.link(depth.left)
 monoRight.out.link(depth.right)
 
+#config = depth.initialConfig.get()
+#config.postProcessing.speckleFilter.enable = False
+#config.postProcessing.speckleFilter.speckleRange = 50
+#config.postProcessing.temporalFilter.enable = True
+#config.postProcessing.spatialFilter.enable = True
+#config.postProcessing.spatialFilter.holeFillingRadius = 2
+#config.postProcessing.spatialFilter.numIterations = 1
+#config.postProcessing.thresholdFilter.minRange = 400
+#config.postProcessing.thresholdFilter.maxRange = 200000
+#config.postProcessing.decimationFilter.decimationFactor = 1
+#depth.initialConfig.set(config)
+#depth.setDepthAlign(dai.CameraBoardSocket.RGB)
+
 # Colormap
 colormap = pipeline.create(dai.node.ImageManip)
+#colormap.setMaxOutputFrameSize(1382400)
 colormap.initialConfig.setColormap(dai.Colormap.TURBO, depth.initialConfig.getMaxDisparity())
 colormap.initialConfig.setFrameType(dai.ImgFrame.Type.NV12)
 depth.disparity.link(colormap.inputImage)
