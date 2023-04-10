@@ -8,15 +8,12 @@ import math
 from kybernetes import MotionController, GPS, IMU, normalize_heading
 
 class App():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self):
         self.controller = MotionController.Connection()
         self.gps = GPS.Connection()
         self.imu = IMU.Connection()
         self.completed = False
-        
+
         Ku = 20
         Pu = 4.5
         #self.sKp = 0.6 * Ku
@@ -31,6 +28,8 @@ class App():
         offset = None
         pE = 0
         I = 0
+        previous_heading = 0
+        response = 0
         while not self.completed:
             orientation = await self.imu.get_orientation()
             heading = orientation.get_heading()
@@ -40,18 +39,27 @@ class App():
                 offset = heading
 
             error = normalize_heading(heading - offset)
-            
+
             # don't wind up pid controller if we're not moving
             if not self.active:
                 continue
 
+            delta = normalize_heading(heading - previous_heading)
+            previous_heading = heading
+
+            if delta > 0:
+                response = response + 1
+            elif delta < 0:
+                response = response - 1
+            print(f'[{time.time()}] delta response = {response}')
+
             # minimize steering error
-            P = self.sKp * error
-            I = I + self.sKi * error
-            D = self.sKd * (error - pE)
-            response = int(P + I + D)
-            pE = error
-            print(f'[{time.time()} error = {error}, response = {response}, P = {P}, I = {I}, D = {D}', flush = True) 
+            #P = self.sKp * error
+            #I = I + self.sKi * error
+            #D = self.sKd * (error - pE)
+            #response = int(P + I + D)
+            #pE = error
+            #print(f'[{time.time()} error = {error}, response = {response}, P = {P}, I = {I}, D = {D}', flush = True)
 
             await self.controller.set_steering(response)
 
@@ -86,7 +94,7 @@ class App():
             print('please arm controller to continue', flush = True)
             await self.controller.wait_until_armable()
             await self.controller.arm()
-            
+
             # status loop
             while True:
                 s = await self.controller.get_status()
@@ -108,7 +116,7 @@ class App():
         # wait for sensor loops to finish
         await imu_task
         await gps_task
-        
+
         # tear down connections
         await self.controller.stop()
         await self.gps.stop()
