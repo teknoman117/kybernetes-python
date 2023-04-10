@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 from asyncio import TimeoutError, get_event_loop, create_task, wait_for, Event, Queue, QueueEmpty
 from crc8 import crc8
 from ctypes import c_uint8, c_uint16, c_int16, c_int32, c_float, memmove, pointer, sizeof, Structure
