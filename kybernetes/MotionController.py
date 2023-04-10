@@ -283,9 +283,6 @@ class DesyncError(Exception):
     pass
 
 class Connection():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, device=DEFAULT_DEVICE, baudrate=DEFAULT_BAUDRATE):
         self.device = device
         self.baudrate = baudrate

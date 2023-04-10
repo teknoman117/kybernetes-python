@@ -3,9 +3,6 @@ import json
 import sys
 
 class Fix():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-    
     def __init__(self, area=0, x=0, y=0):
         self.area = area
         self.x = x
@@ -16,9 +13,6 @@ class Fix():
         return f'Fix(area={self.area}, x={self.x}, y={self.y})'
 
 class Connection():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-    
     def __init__(self):
         pass
         

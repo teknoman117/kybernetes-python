@@ -8,9 +8,6 @@ import math
 POWER_OF_2_30 = 1073741824.0
 
 class Quaternion():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, w=1.0, x=0.0, y=0.0, z=0.0):
         self.w = w
         self.x = x
@@ -60,9 +57,6 @@ class Orientation():
 
 # super basic gpsd client that just scrapes position data
 class Connection():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, device='/run/imud/imu.sock', host=None, port=4000):
         self.device = device
         self.host = host

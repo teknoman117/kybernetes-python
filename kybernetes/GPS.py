@@ -10,9 +10,6 @@ DEFAULT_DEVICE = "/dev/gps"
 class Position():
     EARTH = 6371009.0
 
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-    
     def __init__(self, latitude=0.0, longitude=0.0, declination=0.0):
         self.latitude = latitude
         self.longitude = longitude
@@ -75,9 +72,6 @@ class Position():
 
 # super basic gpsd client that just scrapes position data
 class Connection():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-    
     def __init__(self, device=DEFAULT_DEVICE, host='localhost', port=2947):
         self.device = device
         self.host = host

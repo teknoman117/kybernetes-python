@@ -11,6 +11,7 @@ DRIVE_THROTTLE_KP = 0.75
 ALIGN_STEERING_KP = 100
 ALIGN_THROTTLE_KP = 1.0 / 10.0
 MOVETO_STEERING_KP = 25
+CONTACT_CONE_STEERING_KP = 2
 
 MINIMUM_VELOCITY = 0.3
 
@@ -22,13 +23,11 @@ class Task():
 
 # Task of tasks
 class TaskGroup(Task):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done):
         self.app = app
         self.done = done
 
+        # internal state
         self.active_task = None
         self.tid = 0
         self.tasks = []
@@ -66,9 +65,6 @@ class TaskGroup(Task):
             await self.active_task.on_status(status)
 
 class Drive(Task):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done, distance, heading, velocity):
         self.app = app
         self.done = done
@@ -130,9 +126,6 @@ class Drive(Task):
         self.stopping = True
 
 class Align(Task):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done, heading, velocity, should_stop=True):
         self.app = app
         self.done = done
@@ -196,12 +189,11 @@ class Align(Task):
             await self.done()
 
 class ContactCone(Task):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done):
         self.app = app
         self.done = done
+
+        # internal state
         self.stopping = False
 
     async def on_enter(self):
@@ -225,9 +217,10 @@ class ContactCone(Task):
             await self.stop()
             return
 
-        error = fix.x - 640
+        error = -(fix.x - 640)
+        response = CONTACT_CONE_STEERING_KP * error
         print(f'[{time.time()}] ContactCone.on_camera(): centering error = {error}')
-        await self.app.controller.set_steering(-error * 2)
+        await self.app.controller.set_steering(response)
 
     async def on_status(self, status):
         # wait until our motion ceases before calling task_done()
@@ -249,13 +242,12 @@ class ContactCone(Task):
         self.stopping = True
 
 class FindCone(Task):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done, search_clockwise=True):
         self.app = app
         self.done = done
         self.search_clockwise = search_clockwise
+
+        # internal state
         self.cumulative_heading = 0
         self.previous_heading = None
         self.stopping = False
@@ -318,15 +310,14 @@ class FindCone(Task):
         await self.done()
 
 class MoveTo(Task):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done, target, velocity, should_stop=True):
         self.app = app
         self.done = done
         self.target = target
         self.velocity = velocity
         self.should_stop = should_stop
+
+        # internal state
         self.heading_to_target = 0
         self.stopping = False
 
@@ -355,10 +346,10 @@ class MoveTo(Task):
 
         # slow down as we approach the target
         if distance > 4 or (not self.should_stop and distance > 1):
-            speed = clamp(self.velocity, MINIMUM_VELOCITY, self.velocity)
+            speed = max(self.velocity, MINIMUM_VELOCITY)
             await self.app.controller.set_throttle_pid(speed)
         elif distance > 1:
-            speed = clamp(self.velocity/4, MINIMUM_VELOCITY, self.velocity)
+            speed = max(self.velocity/4, MINIMUM_VELOCITY)
             await self.app.controller.set_throttle_pid(speed)
         else:
             await self.stop()
@@ -383,9 +374,6 @@ class MoveTo(Task):
 
 # Task group to perform tasks relative to starting heading
 class RelativeTaskGroup(TaskGroup):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done):
         super().__init__(app, done)
         self.offset = None
@@ -401,9 +389,6 @@ class RelativeTaskGroup(TaskGroup):
 
 # Perform a 6-point turn to rotate the robot around in a minimal amount of space
 class TurnAround(RelativeTaskGroup):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done):
         super().__init__(app, done)
         self.tasks = [
@@ -418,9 +403,6 @@ class TurnAround(RelativeTaskGroup):
 
 # Move to the left of the cone
 class MovePastLeft(RelativeTaskGroup):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done):
         super().__init__(app, done)
         self.tasks = [
@@ -432,9 +414,6 @@ class MovePastLeft(RelativeTaskGroup):
 
 # Move to the left of the cone
 class MovePastRight(RelativeTaskGroup):
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     def __init__(self, app, done):
         super().__init__(app, done)
         self.tasks = [
@@ -445,9 +424,6 @@ class MovePastRight(RelativeTaskGroup):
         ]
 
 class App():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-
     async def imu_task(self):
         # get one IMU measurement to know our starting heading
         orientation = await self.imu.get_orientation()
@@ -563,7 +539,7 @@ class App():
     def __init__(self):
         self.controller = MotionController.Connection()
         self.gps = GPS.Connection()
-        self.imu = IMU.Connection()
+        self.imu = IMU.Connection(device='/run/user/1000/imu.sock')
         self.camera = Camera.Connection()
 
         # tasks to perform for this run
