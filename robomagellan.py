@@ -375,6 +375,76 @@ class MoveTo(Task):
         else:
             await self.done()
 
+class WTF(Task):
+    def __init__(self, app, done, target, heading, velocity, use_lon=False, should_stop=True):
+        self.app = app
+        self.done = done
+        self.target = target
+        self.heading = heading
+        self.velocity = velocity
+        self.use_lon = use_lon
+        self.should_stop = should_stop
+
+        # internal state
+        self.stopping = False
+
+    async def on_enter(self):
+        print(f'[{time.time()}] WTF.on_enter()', flush=True)
+        await self.app.controller.reset_odometer()
+
+    async def on_exit(self):
+        print(f'[{time.time()}] WTF.on_exit()', flush=True)
+
+    async def on_imu(self, orientation, heading):
+        error = -normalize_heading(self.heading - heading)
+        response = int(DRIVE_STEERING_KP * error)
+        if self.velocity < 0:
+            response = -response
+        print(f'[{time.time()}] WTF.on_imu(): heading error = {error}', flush=True)
+        await self.app.controller.set_steering(response)
+
+    async def on_gps(self, position):
+        if self.stopping:
+            return
+        
+        position_adj = position
+        if self.use_lon:
+            position_adj.latitude = self.target.latitude
+        else:
+            position_adj.longitude = self.target.longitude
+
+        self.heading_to_target = position_adj.get_heading_to(self.target, magnetic=False)
+        distance = position.get_distance_to(self.target)
+        print(f'[{time.time()}] WTF.on_gps(): heading to target = {self.heading_to_target}, distance to target = {distance}')
+
+        # slow down as we approach the target
+        if distance > 4 or (not self.should_stop and distance > 1):
+            speed = max(self.velocity, MINIMUM_VELOCITY)
+            await self.app.controller.set_throttle_pid(speed)
+        elif distance > 1:
+            speed = max(self.velocity/4, MINIMUM_VELOCITY)
+            await self.app.controller.set_throttle_pid(speed)
+        else:
+            await self.stop()
+
+    async def on_camera(self, fix):
+        pass
+
+    async def on_status(self, status):
+        # wait until our motion ceases before calling task_done()
+        if self.stopping:
+            if status.stopped():
+                await self.done()
+            return
+
+    async def stop(self):
+        print(f'[{time.time()}] WTF.stop()', flush=True)
+        if self.should_stop:
+            await self.app.controller.set_throttle_pwm(0)
+            self.stopping = True
+        else:
+            await self.done()
+
 # Task group to perform tasks relative to starting heading
 class RelativeTaskGroup(TaskGroup):
     def __init__(self, app, done):
@@ -396,12 +466,12 @@ class TurnAround(RelativeTaskGroup):
         super().__init__(app, done)
         self.tasks = [
             Drive(app, self.task_done, heading = 0, velocity = -1.0, distance = -0.5),
-            Align(app, self.task_done, heading = -30, velocity = -0.5),
-            Align(app, self.task_done, heading = -60, velocity = 0.5),
-            Align(app, self.task_done, heading = -90, velocity = -0.5),
-            Align(app, self.task_done, heading = -120, velocity = 0.5),
-            Align(app, self.task_done, heading = -150, velocity = -0.5),
-            Align(app, self.task_done, heading = -180, velocity = 0.5),
+            Align(app, self.task_done, heading = -30, velocity = -1.0),
+            Align(app, self.task_done, heading = -60, velocity = 1.0),
+            Align(app, self.task_done, heading = -90, velocity = -1.0),
+            Align(app, self.task_done, heading = -120, velocity = 1.0),
+            Align(app, self.task_done, heading = -150, velocity = -1.0),
+            Align(app, self.task_done, heading = -180, velocity = 1.0),
         ]
 
 # Move to the left of the cone
@@ -409,10 +479,9 @@ class MovePastLeft(RelativeTaskGroup):
     def __init__(self, app, done):
         super().__init__(app, done)
         self.tasks = [
-            Drive(app, self.task_done, heading = 0, velocity = -1.0, distance = -0.5),
-            Align(app, self.task_done, heading = -30, velocity = -0.5),
-            Drive(app, self.task_done, heading = -30, velocity = 0.5, distance = 1.5),
-            Align(app, self.task_done, heading = 0, velocity = 0.5),
+            Drive(app, self.task_done, heading = 0, velocity = -1.5, distance = -0.5),
+            Align(app, self.task_done, heading = -30, velocity = -1.5),
+            Drive(app, self.task_done, heading = -30, velocity = 1.5, distance = 1.5)
         ]
 
 # Move to the left of the cone
@@ -542,7 +611,7 @@ class App():
     def __init__(self):
         self.controller = MotionController.Connection()
         self.gps = GPS.Connection()
-        self.imu = IMU.Connection(device='/run/user/1000/imu.sock')
+        self.imu = IMU.Connection(host='localhost')
         self.camera = Camera.Connection()
 
         # tasks to perform for this run
@@ -551,34 +620,49 @@ class App():
         self.active_task = None
         self.tid = 0
         self.tasks = [\
-            # bonus 1 ("easy cone")
-            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659429, longitude=-121.885740).offset(heading = -90, distance = 2), velocity = 3, should_stop=True),
-            # GPS signals are bad at this spot, dead reckon to the cone
-            Align(self, self.task_done, heading = 92, velocity = 1.0),
-            Drive(self, self.task_done, heading = 92, velocity = 2.0, distance = 25),
-
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326944, longitude=-121.891337), velocity = 3, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326989, longitude=-121.891523), velocity = 3, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327029, longitude=-121.891542).offset(heading=0, distance=2), velocity = 3, should_stop=True),
+            Align(self, self.task_done, heading = 0, velocity = 1.0),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
             MovePastLeft(self, self.task_done),
+            
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327179, longitude=-121.891654), velocity = 3, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327373, longitude=-121.891790), velocity = 3, should_stop=True),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327398, longitude=-121.891819).offset(heading=60, distance=0.5).offset(heading=320, distance=2), velocity = 0.75, should_stop=True),
+                        
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done)
+            
+            # bonus 1 ("easy cone")
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659429, longitude=-121.885740).offset(heading = -90, distance = 2), velocity = 3, should_stop=True),
+            # GPS signals are bad at this spot, dead reckon to the cone
+            #Align(self, self.task_done, heading = 92, velocity = 1.0),
+            #Drive(self, self.task_done, heading = 92, velocity = 2.0, distance = 25),
+
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #MovePastLeft(self, self.task_done),
 
             # more dead reckoning to get out of GPS dead zone
-            Drive(self, self.task_done, heading = 90, velocity = 2.0, distance = 5),
+            #Drive(self, self.task_done, heading = 90, velocity = 2.0, distance = 5),
 
             # gps should be good now
             # bonus 2 ("trap cone")
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659496, longitude=-121.885594), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659576, longitude=-121.885509), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659493, longitude=-121.885488).offset(heading = 55, distance = 7), velocity = 3, should_stop = True),
-            Align(self, self.task_done, heading = -120, velocity = 1.0),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
-            TurnAround(self, self.task_done),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659496, longitude=-121.885594), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659576, longitude=-121.885509), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659493, longitude=-121.885488).offset(heading = 55, distance = 7), velocity = 3, should_stop = True),
+            #Align(self, self.task_done, heading = -120, velocity = 1.0),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #TurnAround(self, self.task_done),
 
             # goal cone
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659730, longitude=-121.885390), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659934, longitude=-121.885337).offset(heading = -90, distance = 7), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659730, longitude=-121.885390), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659934, longitude=-121.885337).offset(heading = -90, distance = 7), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
         ]
 
 # run asynchronous app

@@ -27,6 +27,7 @@ image_height = 720
 
 # debug mode
 debug = False
+encode = True
 if len(sys.argv) > 1 and sys.argv[1] == '--debug':
     debug = True
 
@@ -89,7 +90,7 @@ colormap.initialConfig.setFrameType(dai.ImgFrame.Type.NV12)
 depth.disparity.link(colormap.inputImage)
     
 # Video Encoders if not in debug mode
-if not debug:
+if encode:
     videoEnc = pipeline.create(dai.node.VideoEncoder)
     videoEnc.setDefaultProfilePreset(camRgb.getFps(), dai.VideoEncoderProperties.Profile.H265_MAIN)
     xoutVideoEnc = pipeline.create(dai.node.XLinkOut)
@@ -109,7 +110,7 @@ if not debug:
 with dai.Device(pipeline, usb2Mode=True) as device:
     video = device.getOutputQueue(name="video", maxSize=1, blocking=False)
 
-    if not debug:
+    if encode:
         bitstream = device.getOutputQueue(name='h265', maxSize=int(camRgb.getFps()), blocking=True)
         bitstreamDepth = device.getOutputQueue(name='h264', maxSize=int(monoLeft.getFps()), blocking=True)
 
@@ -135,7 +136,7 @@ with dai.Device(pipeline, usb2Mode=True) as device:
     last_frame_time = time.time() - 1
     while True:
         # no video encoder in debug mode
-        if not debug:
+        if encode:
             queues = ("video", "h265", "h264")
         else:
             queues = ("video")

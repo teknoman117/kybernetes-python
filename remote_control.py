@@ -34,7 +34,7 @@ class App():
             await self.controller.wait_until_armable()
             await self.controller.arm()
             print('moving forward')
-            await self.controller.set_throttle_pid(0.5)
+            await self.controller.set_throttle_pid(2.0)
             while True:
                 s = await self.controller.get_status()
                 if not s.armed():
@@ -48,7 +48,7 @@ class App():
             await self.controller.wait_until_armable()
             await self.controller.arm()
             print('moving backward')
-            await self.controller.set_throttle_pid(-0.5)
+            await self.controller.set_throttle_pid(-0.25)
             while True:
                 s = await self.controller.get_status()
                 if not s.armed():
