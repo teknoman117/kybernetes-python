@@ -406,7 +406,7 @@ class WTF(Task):
     async def on_gps(self, position):
         if self.stopping:
             return
-        
+
         position_adj = position
         if self.use_lon:
             position_adj.latitude = self.target.latitude
@@ -620,21 +620,32 @@ class App():
         self.active_task = None
         self.tid = 0
         self.tasks = [\
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326944, longitude=-121.891337), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326989, longitude=-121.891523), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327029, longitude=-121.891542).offset(heading=0, distance=2), velocity = 3, should_stop=True),
-            Align(self, self.task_done, heading = 0, velocity = 1.0),
+            # Southern Cone
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.392734, longitude=-122.079661).offset(heading=30, distance = 2), velocity = 3, should_stop=True),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
-            MovePastLeft(self, self.task_done),
-            
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327179, longitude=-121.891654), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327373, longitude=-121.891790), velocity = 3, should_stop=True),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327398, longitude=-121.891819).offset(heading=60, distance=0.5).offset(heading=320, distance=2), velocity = 0.75, should_stop=True),
-                        
+            TurnAround(self, self.task_done),
+
+            # Northern Cone
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.392827, longitude=-122.079605).offset(heading=30, distance = 8), velocity = 3, should_stop=True),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done)
-            
+
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326944, longitude=-121.891337), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326989, longitude=-121.891523), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327029, longitude=-121.891542).offset(heading=0, distance=2), velocity = 3, should_stop=True),
+            #Align(self, self.task_done, heading = 0, velocity = 1.0),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #MovePastLeft(self, self.task_done),
+
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327179, longitude=-121.891654), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327373, longitude=-121.891790), velocity = 3, should_stop=True),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327398, longitude=-121.891819).offset(heading=60, distance=0.5).offset(heading=320, distance=2), velocity = 0.75, should_stop=True),
+
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done)
+
             # bonus 1 ("easy cone")
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659429, longitude=-121.885740).offset(heading = -90, distance = 2), velocity = 3, should_stop=True),
             # GPS signals are bad at this spot, dead reckon to the cone
