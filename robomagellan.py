@@ -221,7 +221,7 @@ class ContactCone(Task):
             return
 
         error = -fix.x
-        response = CONTACT_CONE_STEERING_KP * error
+        response = int(CONTACT_CONE_STEERING_KP * error)
         print(f'[{time.time()}] ContactCone.on_camera(): centering error = {error}')
         await self.app.controller.set_steering(response)
 
