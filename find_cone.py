@@ -23,9 +23,9 @@ class App():
                 continue
             
             # update error
-            error = fix.x - 640
-            print(f'error = {error}')
-            await self.controller.set_steering(-error * 2)
+            error = -fix.x
+            print(f'error = {error} (degrees)')
+            await self.controller.set_steering(error * 32)
         
     async def run(self):
         await self.controller.start()

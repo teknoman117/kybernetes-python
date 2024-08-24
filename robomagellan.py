@@ -14,7 +14,7 @@ DRIVE_THROTTLE_KP = 0.75
 ALIGN_STEERING_KP = 100
 ALIGN_THROTTLE_KP = 1.0 / 10.0
 MOVETO_STEERING_KP = 25
-CONTACT_CONE_STEERING_KP = 2
+CONTACT_CONE_STEERING_KP = 32
 
 MINIMUM_VELOCITY = 0.3
 
@@ -220,7 +220,7 @@ class ContactCone(Task):
             await self.stop()
             return
 
-        error = -(fix.x - 640)
+        error = -fix.x
         response = CONTACT_CONE_STEERING_KP * error
         print(f'[{time.time()}] ContactCone.on_camera(): centering error = {error}')
         await self.app.controller.set_steering(response)

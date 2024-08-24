@@ -55,7 +55,7 @@ xoutVideo.input.setQueueSize(1)
 camRgb.video.link(xoutVideo.input)
 
 # Connect to device and start pipeline
-with dai.Device(pipeline, usb2Mode=False) as device:
+with dai.Device(pipeline, usb2Mode=True) as device:
 
     video = device.getOutputQueue(name="video", maxSize=1, blocking=False)
 

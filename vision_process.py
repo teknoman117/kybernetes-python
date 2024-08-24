@@ -17,9 +17,11 @@ import math
 # thresholds
 hmin = 15
 hmax = 175
-smin = 150
+#smin = 150
+smin = 220
 smax = 255
-vmin = 150
+#vmin = 150
+vmin = 55
 vmax = 255
 
 image_width = 1280
@@ -27,7 +29,7 @@ image_height = 720
 
 # debug mode
 debug = False
-encode = True
+encode = False
 if len(sys.argv) > 1 and sys.argv[1] == '--debug':
     debug = True
 
@@ -106,18 +108,30 @@ if encode:
     xoutVideoEncDepth.setStreamName('h264')
     videoEncDepth.bitstream.link(xoutVideoEncDepth.input)
 
+def getHFov(intrinsics, width):
+    fx = intrinsics[0][0]
+    fov = 2 * 180 / (math.pi) * math.atan(width * 0.5 / fx)
+    return fov
+
+def getVFov(intrinsics, height):
+    fy = intrinsics[1][1]
+    fov = 2 * 180 / (math.pi) * math.atan(height * 0.5 / fy)
+    return fov
+
 # Connect to device and start pipeline
 with dai.Device(pipeline, usb2Mode=True) as device:
     video = device.getOutputQueue(name="video", maxSize=1, blocking=False)
 
     if encode:
+        # Get the bitstream queues
         bitstream = device.getOutputQueue(name='h265', maxSize=int(camRgb.getFps()), blocking=True)
         bitstreamDepth = device.getOutputQueue(name='h264', maxSize=int(monoLeft.getFps()), blocking=True)
 
-    videoName = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_%Y-%m-%d_%H-%M-%S.h265')
-    videoNameDepth = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_depth_%Y-%m-%d_%H-%M-%S.h264')
-    videoFile = open(videoName, "w")
-    videoFileDepth = open(videoNameDepth, "w")
+        # open the video files
+        videoName = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_%Y-%m-%d_%H-%M-%S.h265')
+        videoNameDepth = datetime.datetime.now().strftime('/home/nlewis/Videos/capture_depth_%Y-%m-%d_%H-%M-%S.h264')
+        videoFile = open(videoName, "w")
+        videoFileDepth = open(videoNameDepth, "w")
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, [5, 5])
 
@@ -126,12 +140,11 @@ with dai.Device(pipeline, usb2Mode=True) as device:
     lower2 = np.array([hmax, smin, vmin])
     upper2 = np.array([180, smax, vmax])
     
+    # compute the field of view of the camera
     calib = device.readCalibration()
     intrinsics = calib.getCameraIntrinsics(dai.CameraBoardSocket.RGB, dai.Size2f(image_width, image_height))
-    
-    hfov =  2 * 180 / (math.pi) * math.atan(image_width * 0.5 / intrinsics[0][0])
-    
-    #print(f'hfov = {hfov}')
+    hfov = getHFov(intrinsics, image_width)
+    vfov = getVFov(intrinsics, image_height)
 
     last_frame_time = time.time() - 1
     while True:
@@ -178,6 +191,9 @@ with dai.Device(pipeline, usb2Mode=True) as device:
             a = stats[i, cv2.CC_STAT_AREA]
             (cX, cY) = centroids[i]
 
+            cX = ((float(cX) / image_width) - 0.5) * hfov
+            cY = ((float(cY) / image_height) - 0.5) * vfov
+
             # reject too small regions
             if a < 100:
                 continue
@@ -187,8 +203,8 @@ with dai.Device(pipeline, usb2Mode=True) as device:
                 candidate['found'] = True
 
                 candidate['area'] = int(a)
-                candidate['x'] = int(cX)
-                candidate['y'] = int(cY)
+                candidate['x'] = float(cX)
+                candidate['y'] = float(cY)
 
                 candidate['rect'] = {}
                 candidate['rect']['x'] = int(x)

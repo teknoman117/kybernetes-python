@@ -1,1 +1,1 @@
-Nathan Lewis <github@nrlewis.dev>
+Nathan Lewis <git@nrlewis.dev>
