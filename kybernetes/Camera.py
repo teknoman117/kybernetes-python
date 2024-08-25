@@ -21,7 +21,7 @@ class Connection():
         pass
         
     async def start(self):
-        self.proc = await asyncio.create_subprocess_exec(sys.executable, 'vision_process.py', stdout=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.PIPE)
+        self.proc = await asyncio.create_subprocess_exec(sys.executable, 'vision_process_nn.py', stdout=asyncio.subprocess.PIPE, stdin=asyncio.subprocess.PIPE)
         await self.proc.stdout.readline()
     
     async def stop(self):
