@@ -216,8 +216,8 @@ class ContactCone(Task):
             return
 
         if fix is None:
-            print(f'[{time.time()}] ContactCone.on_camera(): lost fix, aborting')
-            await self.stop()
+            print(f'[{time.time()}] ContactCone.on_camera(): lost fix')
+            #await self.stop()
             return
 
         error = -fix.x
@@ -496,6 +496,19 @@ class MovePastRight(RelativeTaskGroup):
         ]
 
 class App():
+    async def orientation_task(self):
+        # USFSMAX MMC based heading
+        while not self.completed:
+            q = await self.controller.get_orientation()
+            heading = math.atan2(2.0 * (q.x*q.y - q.w*q.z), q.w*q.w - q.x*q.x + q.y*q.y - q.z*q.z) * 57.2957795
+            heading = normalize_heading(heading)
+            pitch = math.asin(2.0 * (q.y*q.z + q.w*q.x)) * 57.2957795
+            roll = math.atan2(2.0 * (q.w*q.y - q.x*q.z), q.w*q.w - q.x*q.x - q.y*q.y + q.z*q.z) * 57.2957795
+            print(f'[{time.time()}] heading = {heading}, roll = {roll}, pitch = {pitch}')
+
+            if self.active_task is not None:
+                await self.active_task.on_imu(q, heading)
+        
     async def imu_task(self):
         # get one IMU measurement to know our starting heading
         orientation = await self.imu.get_orientation()
@@ -550,6 +563,7 @@ class App():
 
         # start motion controller
         await self.controller.start()
+        #imu_task = asyncio.create_task(self.orientation_task())
 
         # send the configuration packet to the motion controller
         await self.controller.set_configuration(\

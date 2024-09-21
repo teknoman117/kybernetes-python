@@ -26,6 +26,7 @@ PACKET_TYPE_STEERING_SET = 0x20
 PACKET_TYPE_THROTTLE_SET_PWM = 0x30
 PACKET_TYPE_THROTTLE_SET_PID = 0x40
 PACKET_TYPE_CRAWL = 0x50
+PACKET_TYPE_ORIENTATION = 0x60
 PACKET_TYPE_SEND_ARM = 0xA0
 PACKET_TYPE_SEND_KEEPALIVE = 0xA1
 PACKET_TYPE_SEND_DISARM = 0xA2
@@ -101,16 +102,31 @@ class StatusPacket(Structure):
         ("bumperPressed", c_uint8),
         ("odometer", c_int32),
         ("motion", PIDFrame),
+        ("imuStatus", c_uint8),
     ]
 
     def __format__(self, spec):
-        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion})'
+        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion}, imu_status={self.imuStatus})'
 
     def armed(self):
         return self.remote.state == KILL_SWITCH_STATE_ARMED
 
     def stopped(self):
         return self.state == STATE_STOPPED or not self.armed()
+
+class OrientationPacket(Structure):
+    RECEIVE_TYPE = PACKET_TYPE_ORIENTATION
+
+    _pack_ = 1
+    _fields_ = [
+        ("w", c_float),
+        ("x", c_float),
+        ("y", c_float),
+        ("z", c_float),
+    ]
+
+    def __format__(self, spec):
+        return f'OrientationPacket(w = {self.w}, x = {self.x}, y = {self.y}, z = {self.z})'
 
 class ConfigurationPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_CONFIGURATION_GET
@@ -271,6 +287,7 @@ PACKET_TYPE_BY_ID = {
     PACKET_TYPE_THROTTLE_SET_PWM : ThrottleSetPWMAckPacket,
     PACKET_TYPE_THROTTLE_SET_PID : ThrottleSetPIDAckPacket,
     PACKET_TYPE_CRAWL : CrawlAckPacket,
+    PACKET_TYPE_ORIENTATION : OrientationPacket,
     PACKET_TYPE_SEND_ARM : SendArmAckPacket,
     PACKET_TYPE_SEND_KEEPALIVE : SendKeepaliveAckPacket,
     PACKET_TYPE_SEND_DISARM : SendDisarmAckPacket,
@@ -293,6 +310,8 @@ class Connection():
         self.stop_requested = False
         self.status_futures = []
         self.status = StatusPacket()
+        self.orientation_futures = []
+        self.orientation = OrientationPacket()
         self.armed_event = Event()
         self.disarmed_event = Event()
         self.idle_event = Event()
@@ -359,6 +378,11 @@ class Connection():
         self.status_futures.append(f)
         return await f
 
+    async def get_orientation(self):
+        f = get_event_loop().create_future()
+        self.orientation_futures.append(f)
+        return await f
+
     async def arm(self, retries=5):
         await self.send_command(SendArmPacket())
         for i in range(0, retries):
@@ -409,11 +433,13 @@ class Connection():
         return await self.send_command(configuration)
 
     async def set_steering(self, position=0):
-        command = SteeringSetPacket(position = position)
+        p = max(-500, min(500, position))
+        command = SteeringSetPacket(position = p)
         return await self.send_command(command)
 
     async def set_throttle_pwm(self, value=0):
-        command = ThrottleSetPWMPacket(value = value)
+        v = max(-500, min(500, value))
+        command = ThrottleSetPWMPacket(value = v)
         return await self.send_command(command)
 
     async def set_throttle_pid(self, target=0):
@@ -460,6 +486,11 @@ class Connection():
                 for f in self.status_futures:
                     f.set_result(packet)
                 self.status_futures.clear()
+            
+            elif type(packet) is OrientationPacket:
+                for f in self.orientation_futures:
+                    f.set_result(packet)
+                self.orientation_futures.clear()
 
             elif type(packet) is SyncPacket:
                 pass
