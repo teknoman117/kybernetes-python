@@ -15,6 +15,7 @@ import json
 import blobconverter
 import datetime
 import math
+import select
 
 # parse config
 configPath = Path('coneslayer/coneslayer.json')
@@ -208,3 +209,7 @@ with dai.Device(pipeline, usb2Mode=True) as device:
                 candidate['rect']['h'] = int(h)
 
         print(f'{json.dumps(candidate)}', flush=True)
+
+        # exit on data input
+        if select.select([sys.stdin, ], [], [], 0.0)[0]:
+            break
