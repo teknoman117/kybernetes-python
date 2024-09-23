@@ -77,13 +77,16 @@ class Drive(Task):
 
         # internal state
         self.stopping = False
+        self.starting_position = None
+        self.previous_position = None
 
     async def on_enter(self):
         print(f'[{time.time()}] Drive.on_enter()', flush=True)
         await self.app.controller.reset_odometer()
 
     async def on_exit(self):
-        print(f'[{time.time()}] Drive.on_exit()', flush=True)
+        gps_heading = self.starting_position.get_heading_to(self.previous_position, magnetic=False)
+        print(f'[{time.time()}] Drive.on_exit(): gps heading over course = {gps_heading}', flush=True)
 
     async def on_imu(self, orientation, heading):
         error = -normalize_heading(self.heading - heading)
@@ -94,7 +97,9 @@ class Drive(Task):
         await self.app.controller.set_steering(response)
 
     async def on_gps(self, position):
-        pass
+        if self.starting_position is None:
+            self.starting_position = position
+        self.previous_position = position
 
     async def on_camera(self, fix):
         pass
@@ -323,6 +328,7 @@ class MoveTo(Task):
         # internal state
         self.heading_to_target = 0
         self.stopping = False
+        self.previous_position = None
 
     async def on_enter(self):
         print(f'[{time.time()}] MoveTo.on_enter()', flush=True)
@@ -342,6 +348,11 @@ class MoveTo(Task):
     async def on_gps(self, position):
         if self.stopping:
             return
+
+        if self.previous_position is not None:
+            gps_heading = self.previous_position.get_heading_to(position, magnetic=False)
+            print(f'[{time.time()}] MoveTo.on_gps(): gps heading = {gps_heading}')
+        self.previous_position = position
 
         self.heading_to_target = position.get_heading_to(self.target, magnetic=False)
         distance = position.get_distance_to(self.target)
@@ -634,17 +645,38 @@ class App():
         self.active_task = None
         self.tid = 0
         self.tasks = [\
-            # Southern Cone
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.392734, longitude=-122.079661).offset(heading=30, distance = 2), velocity = 3, should_stop=True),
+            ### Botnic 2024
+            # Bonus Cone 1
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4117162, longitude=-121.9960500).offset(heading=90,   distance = 2), velocity = 3, should_stop=True),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
-            TurnAround(self, self.task_done),
+            Drive(self, self.task_done, heading = -135, velocity = -1.5, distance = -2),
+
+            # Bonus Cone 2
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4123961, longitude=-121.9958946).offset(heading=-135, distance = 2), velocity = 3, should_stop=True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Drive(self, self.task_done, heading = 45, velocity = -1.5, distance = -2),
+
+            # Destination Cone
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4122453, longitude=-121.9961880).offset(heading=135,  distance = 2), velocity = 3, should_stop=True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+
+            ### July Demo 2024
+            # Southern Cone
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.392734, longitude=-122.079661).offset(heading=30, distance = 2), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #TurnAround(self, self.task_done),
 
             # Northern Cone
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.392827, longitude=-122.079605).offset(heading=30, distance = 8), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done)
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.392827, longitude=-122.079605).offset(heading=30, distance = 8), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done)
 
+            ### Robogames 2024
+            # Bonus Cone 2
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326944, longitude=-121.891337), velocity = 3, should_stop=False),
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.326989, longitude=-121.891523), velocity = 3, should_stop=False),
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327029, longitude=-121.891542).offset(heading=0, distance=2), velocity = 3, should_stop=True),
@@ -653,6 +685,7 @@ class App():
             #ContactCone(self, self.task_done),
             #MovePastLeft(self, self.task_done),
 
+            # Destination Cone
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327179, longitude=-121.891654), velocity = 3, should_stop=False),
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327373, longitude=-121.891790), velocity = 3, should_stop=True),
             #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.327398, longitude=-121.891819).offset(heading=60, distance=0.5).offset(heading=320, distance=2), velocity = 0.75, should_stop=True),
@@ -660,8 +693,9 @@ class App():
             #FindCone(self, self.task_done),
             #ContactCone(self, self.task_done)
 
+            ### Robogames 2023
             # bonus 1 ("easy cone")
-            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659429, longitude=-121.885740).offset(heading = -90, distance = 2), velocity = 3, should_stop=True),
+            ##MoveTo(self, self.task_done, target = GPS.Position(latitude=37.659429, longitude=-121.885740).offset(heading = -90, distance = 2), velocity = 3, should_stop=True),
             # GPS signals are bad at this spot, dead reckon to the cone
             #Align(self, self.task_done, heading = 92, velocity = 1.0),
             #Drive(self, self.task_done, heading = 92, velocity = 2.0, distance = 25),
