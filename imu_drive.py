@@ -10,66 +10,90 @@ import math
 
 from kybernetes import MotionController, GPS, IMU, normalize_heading
 
+class PIDController():
+    def __init__(self, Kp = 50, Ki = 1, Kd = 100, limits = (-500, 500)):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.limits = limits
+        self.previous_error = 0
+        self.target = 0
+        self.I = 0
+
+        # log configuration
+        msg = dict()
+        msg['timestamp'] = time.time()
+        msg['type'] = 'configuration'
+        msg['Kp'] = self.Kp
+        msg['Ki'] = self.Ki
+        msg['Kd'] = self.Kd
+        print(json.dumps(msg), flush = True)
+    
+    def set_target(self, target):
+        self.target = target
+    
+    def compute(self, input):
+        error = input - self.target
+        P = self.Kp * error
+        self.I = self.I + self.Ki * error
+        D = self.Kd * (error - self.previous_error)
+        self.previous_error = error            
+        response = int(P + self.I + D)
+        
+        # limit windup by backfeeding I term
+        (minimum, maximum) = self.limits
+        if response > maximum:
+            response = maximum
+            self.I = max(maximum - (P + D), 0)
+        elif response < minimum:
+            response = minimum
+            self.I = min(minimum - (P + D), 0)
+            
+        msg = dict()
+        msg['timestamp'] = time.time()
+        msg['type'] = 'pid'
+        msg['error'] = error
+        msg['response'] = response
+        msg['P'] = P
+        msg['I'] = self.I
+        msg['D'] = D
+        print(json.dumps(msg), flush = True)
+            
+        return response
+
 class App():
     def __init__(self):
         self.controller = MotionController.Connection()
         self.gps = GPS.Connection()
         self.imu = IMU.Connection()
-        self.completed = False
-
-        Ku = 20
-        Pu = 4.5
-        #self.sKp = 0.6 * Ku
-        #self.sKi = 2 * self.sKp / Pu
-        #self.sKd = self.sKp * Pu / 8
-        self.sKp = Ku
-        self.sKi = 0
-        self.sKd = 0
-        self.active = False
+        #self.pid = PIDController(Kp=20, Ki=0, Kd=0)
+        self.pid = PIDController(Kp=50, Ki=1, Kd=100)
+        self.velocity = 0
 
     async def imu_task(self):
         offset = None
-        pE = 0
-        I = 0
-        previous_heading = 0
-        response = 0
-        while not self.completed:
+        while True:
+            # get heading
             orientation = await self.imu.get_orientation()
             heading = orientation.get_heading()
-
-            # store "offset to north"
             if offset is None:
                 offset = heading
-
-            error = normalize_heading(heading - offset)
+            heading = normalize_heading(heading - offset)
 
             # don't wind up pid controller if we're not moving
-            if not self.active:
-                continue
-
-            delta = normalize_heading(heading - previous_heading)
-            previous_heading = heading
-
-            if delta > 0:
-                response = response + 1
-            elif delta < 0:
-                response = response - 1
-            print(f'[{time.time()}] delta response = {response}')
-
-            # minimize steering error
-            #P = self.sKp * error
-            #I = I + self.sKi * error
-            #D = self.sKd * (error - pE)
-            #response = int(P + I + D)
-            #pE = error
-            #print(f'[{time.time()} error = {error}, response = {response}, P = {P}, I = {I}, D = {D}', flush = True)
-
-            await self.controller.set_steering(response)
+            if self.velocity != 0:
+                await self.controller.set_steering(self.pid.compute(heading))
 
     async def gps_task(self):
-        while not self.completed:
+        while True:
             position = await self.gps.get_position()
-            print(f'gps = {position}', flush = True)
+            msg = dict()
+            msg['timestamp'] = time.time()
+            msg['type'] = 'gps'
+            msg['lat'] = position.get_latitude()
+            msg['lon'] = position.get_longitude()
+            msg['dec'] = position.get_declination()
+            print(json.dumps(msg), flush = True)
 
     async def run(self):
         # open motion controller and sensors
@@ -85,45 +109,35 @@ class App():
         await self.controller.set_configuration(\
             deadzone_forward = 1525,
             deadzone_backward = 1475,
-            deadzone_left = 1525,
-            deadzone_right = 1525,
+            deadzone_left = 1430,
+            deadzone_right = 1430,
             Kp = 0.15,
             Ki = 0.25,
             Kd = 0.01
         )
 
         # issue throttle set while we have work to do
-        while not self.completed:
-            print('please arm controller to continue', flush = True)
+        while True:
+            msg = dict()
+            msg['timestamp'] = time.time()
+            msg['type'] = 'notification'
+            msg['text'] = 'please arm controller to continue'
+            print(json.dumps(msg), flush = True)
             await self.controller.wait_until_armable()
             await self.controller.arm()
 
             # status loop
             while True:
                 s = await self.controller.get_status()
+                self.velocity = s.motion.Input[0]
+
                 if not s.armed():
                     # we were disarmed (remotely, hopefully)
-                    self.active = False
                     await self.controller.wait_for_idle()
-                    break
-                elif self.completed:
-                    # we finished our run!
                     break
                 else:
                     # otherwise update speed
-                    self.active = True
-                    await self.controller.set_throttle_pid(0.33)
-
-        await self.controller.set_throttle_pid(0)
-
-        # wait for sensor loops to finish
-        await imu_task
-        await gps_task
-
-        # tear down connections
-        await self.controller.stop()
-        await self.gps.stop()
-        await self.imu.stop()
+                    await self.controller.set_throttle_pid(1.00)
 
 # run asynchronous app
 if __name__ == "__main__":

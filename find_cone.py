@@ -5,54 +5,55 @@
 
 import asyncio
 
-from kybernetes import Camera, MotionController
+from kybernetes import Camera, MotionController, PID
 
 class App():
-    def __new__(cls, *args, **kwargs):
-        return super().__new__(cls)
-    
     def __init__(self):
         self.controller = MotionController.Connection()
         self.camera = Camera.Connection()
+        #self.steering_pid = PID.PositionController(Kp=32, Ki=0, Kd=0)
+        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
         self.completed = False
-        
+
     async def camera_task(self):
         while not self.completed:
             fix = await self.camera.get_fix()
             if fix is None:
                 continue
-            
+
             # update error
             error = -fix.x
             print(f'error = {error} (degrees)')
-            await self.controller.set_steering(int(error * 32))
-        
+            await self.controller.set_steering(self.steering_pid.compute(error=error))
+
     async def run(self):
         await self.controller.start()
         await self.camera.start()
-        
+
         camera_task = asyncio.create_task(self.camera_task())
-        
+
         # send the configuration packet
         await self.controller.set_configuration(\
             deadzone_forward = 1525,
             deadzone_backward = 1475,
-            deadzone_left = 1525,
-            deadzone_right = 1525,
+            deadzone_left = 1430,
+            deadzone_right = 1430,
             Kp = 0.15,
             Ki = 0.25,
             Kd = 0.01
         )
-        
+
         # issue throttle set while we have work to do
         while not self.completed:
             print('please arm controller to continue')
             await self.controller.wait_until_armable()
             await self.controller.arm()
-            
+
             # status loop
             while True:
                 s = await self.controller.get_status()
+                self.steering_pid.set_moving(s.motion.Input[0] != 0)
+
                 if not s.armed():
                     # we were disarmed (remotely, hopefully)
                     await self.controller.wait_for_idle()
@@ -69,7 +70,7 @@ class App():
         # wait for sensor loops to finish
         await camera_task
         await self.controller.disarm()
-        
+
         # tear down connections
         await self.camera.stop()
         await self.controller.stop()

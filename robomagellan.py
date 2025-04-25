@@ -7,14 +7,10 @@ import asyncio
 import time
 import math
 
-from kybernetes import MotionController, GPS, IMU, Camera, normalize_heading
+from kybernetes import MotionController, GPS, IMU, Camera, PID, normalize_heading
 
-DRIVE_STEERING_KP = 50
 DRIVE_THROTTLE_KP = 0.75
-ALIGN_STEERING_KP = 100
 ALIGN_THROTTLE_KP = 1.0 / 10.0
-MOVETO_STEERING_KP = 25
-CONTACT_CONE_STEERING_KP = 32
 
 MINIMUM_VELOCITY = 0.3
 
@@ -74,6 +70,8 @@ class Drive(Task):
         self.distance = distance
         self.heading = heading
         self.velocity = velocity
+        #self.steering_pid = PID.PositionController(Kp=50, Ki=0, Kd=0)
+        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
 
         # internal state
         self.stopping = False
@@ -90,10 +88,11 @@ class Drive(Task):
 
     async def on_imu(self, orientation, heading):
         error = -normalize_heading(self.heading - heading)
-        response = int(DRIVE_STEERING_KP * error)
+        print(f'[{time.time()}] Drive.on_imu(): heading error = {error}', flush=True)
+
+        response = self.steering_pid.compute(error=error)
         if self.velocity < 0:
             response = -response
-        print(f'[{time.time()}] Drive.on_imu(): heading error = {error}', flush=True)
         await self.app.controller.set_steering(response)
 
     async def on_gps(self, position):
@@ -106,6 +105,7 @@ class Drive(Task):
 
     async def on_status(self, status):
         # extract the PID input and add it to the odometer
+        self.steering_pid.set_moving(status.motion.Input[0] != 0)
         meters = status.odometer / MotionController.TICKS_PER_METER
         error = self.distance - meters
         print(f'[{time.time()}] Drive.on_status(): distance error = {error}', flush=True)
@@ -140,6 +140,8 @@ class Align(Task):
         self.heading = heading
         self.velocity = velocity
         self.should_stop = should_stop
+        #self.steering_pid = PID.PositionController(Kp=100, Ki=0, Kd=0)
+        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
 
         # internal state
         self.stopping = False
@@ -157,7 +159,7 @@ class Align(Task):
         if self.stopping:
             return
 
-        steering_response = int(ALIGN_STEERING_KP * error)
+        steering_response = self.steering_pid.compute(error=error)
         if self.should_stop:
             throttle_response = clamp(ALIGN_THROTTLE_KP * error, MINIMUM_VELOCITY, abs(self.velocity))
         else:
@@ -182,6 +184,7 @@ class Align(Task):
         pass
 
     async def on_status(self, status):
+        self.steering_pid.set_moving(status.motion.Input[0] != 0)
         # wait until our motion ceases before calling task_done()
         if self.stopping:
             if status.stopped():
@@ -200,6 +203,8 @@ class ContactCone(Task):
     def __init__(self, app, done):
         self.app = app
         self.done = done
+        #self.steering_pid = PID.PositionController(Kp=32, Ki=0, Kd=0)
+        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
 
         # internal state
         self.stopping = False
@@ -226,11 +231,12 @@ class ContactCone(Task):
             return
 
         error = -fix.x
-        response = int(CONTACT_CONE_STEERING_KP * error)
         print(f'[{time.time()}] ContactCone.on_camera(): centering error = {error}')
+        response = self.steering_pid.compute(error=error)
         await self.app.controller.set_steering(response)
 
     async def on_status(self, status):
+        self.steering_pid.set_moving(status.motion.Input[0] != 0)
         # wait until our motion ceases before calling task_done()
         if self.stopping:
             if status.stopped():
@@ -324,6 +330,8 @@ class MoveTo(Task):
         self.target = target
         self.velocity = velocity
         self.should_stop = should_stop
+        #self.steering_pid = PID.PositionController(Kp=25, Ki=0, Kd=0)
+        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
 
         # internal state
         self.heading_to_target = 0
@@ -341,8 +349,8 @@ class MoveTo(Task):
             return
 
         error = -normalize_heading(self.heading_to_target - heading)
-        response = int(MOVETO_STEERING_KP * error)
         print(f'[{time.time()}] MoveTo.on_imu(): heading error = {error}')
+        response = self.steering_pid.compute(error=error)
         await self.app.controller.set_steering(response)
 
     async def on_gps(self, position):
@@ -373,6 +381,7 @@ class MoveTo(Task):
 
     async def on_status(self, status):
         # wait until our motion ceases before calling task_done()
+        self.steering_pid.set_moving(status.motion.Input[0] != 0)
         if self.stopping:
             if status.stopped():
                 await self.done()
@@ -380,76 +389,6 @@ class MoveTo(Task):
 
     async def stop(self):
         print(f'[{time.time()}] MoveTo.stop()', flush=True)
-        if self.should_stop:
-            await self.app.controller.set_throttle_pwm(0)
-            self.stopping = True
-        else:
-            await self.done()
-
-class WTF(Task):
-    def __init__(self, app, done, target, heading, velocity, use_lon=False, should_stop=True):
-        self.app = app
-        self.done = done
-        self.target = target
-        self.heading = heading
-        self.velocity = velocity
-        self.use_lon = use_lon
-        self.should_stop = should_stop
-
-        # internal state
-        self.stopping = False
-
-    async def on_enter(self):
-        print(f'[{time.time()}] WTF.on_enter()', flush=True)
-        await self.app.controller.reset_odometer()
-
-    async def on_exit(self):
-        print(f'[{time.time()}] WTF.on_exit()', flush=True)
-
-    async def on_imu(self, orientation, heading):
-        error = -normalize_heading(self.heading - heading)
-        response = int(DRIVE_STEERING_KP * error)
-        if self.velocity < 0:
-            response = -response
-        print(f'[{time.time()}] WTF.on_imu(): heading error = {error}', flush=True)
-        await self.app.controller.set_steering(response)
-
-    async def on_gps(self, position):
-        if self.stopping:
-            return
-
-        position_adj = position
-        if self.use_lon:
-            position_adj.latitude = self.target.latitude
-        else:
-            position_adj.longitude = self.target.longitude
-
-        self.heading_to_target = position_adj.get_heading_to(self.target, magnetic=False)
-        distance = position.get_distance_to(self.target)
-        print(f'[{time.time()}] WTF.on_gps(): heading to target = {self.heading_to_target}, distance to target = {distance}')
-
-        # slow down as we approach the target
-        if distance > 4 or (not self.should_stop and distance > 1):
-            speed = max(self.velocity, MINIMUM_VELOCITY)
-            await self.app.controller.set_throttle_pid(speed)
-        elif distance > 1:
-            speed = max(self.velocity/4, MINIMUM_VELOCITY)
-            await self.app.controller.set_throttle_pid(speed)
-        else:
-            await self.stop()
-
-    async def on_camera(self, fix):
-        pass
-
-    async def on_status(self, status):
-        # wait until our motion ceases before calling task_done()
-        if self.stopping:
-            if status.stopped():
-                await self.done()
-            return
-
-    async def stop(self):
-        print(f'[{time.time()}] WTF.stop()', flush=True)
         if self.should_stop:
             await self.app.controller.set_throttle_pwm(0)
             self.stopping = True
@@ -506,6 +445,14 @@ class MovePastRight(RelativeTaskGroup):
             Align(app, self.task_done, heading = 0, velocity = 0.5),
         ]
 
+# Back up
+class Backup(RelativeTaskGroup):
+    def __init__(self, app, done, velocity = 1.5, distance = 1.5):
+        super().__init__(app, done)
+        self.tasks = [
+            Drive(app, self.task_done, heading = 0, velocity = -abs(velocity), distance = -abs(distance)),
+        ]
+
 class App():
     async def orientation_task(self):
         # USFSMAX MMC based heading
@@ -519,7 +466,7 @@ class App():
 
             if self.active_task is not None:
                 await self.active_task.on_imu(q, heading)
-        
+
     async def imu_task(self):
         # get one IMU measurement to know our starting heading
         orientation = await self.imu.get_orientation()
@@ -580,8 +527,8 @@ class App():
         await self.controller.set_configuration(\
             deadzone_forward = 1525,
             deadzone_backward = 1475,
-            deadzone_left = 1525,
-            deadzone_right = 1525,
+            deadzone_left = 1430,
+            deadzone_right = 1430,
             Kp = 0.15,
             Ki = 0.25,
             Kd = 0.01

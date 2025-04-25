@@ -8,9 +8,7 @@ import time
 import json
 import math
 
-from kybernetes import MotionController, GPS, IMU, normalize_heading
-
-HEADING_Kp = 450.0 / 45.0
+from kybernetes import MotionController, GPS, IMU, PID, normalize_heading
 
 class App():
     def __new__(cls, *args, **kwargs):
@@ -20,6 +18,8 @@ class App():
         self.controller = MotionController.Connection()
         self.gps = GPS.Connection()
         self.imu = IMU.Connection()
+        #self.steering_pid = PID.PositionController(Kp=10, Ki=0, Kd=0)
+        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
 
         # waypoints around Hellman Hollow in SF's Golden Gate Park
         self.targets = [\
@@ -45,11 +45,10 @@ class App():
             # store "offset to north"
             if offset is None:
                 offset = heading
-
-            # goal is "north"
             heading = normalize_heading(heading - offset)
+
             error = -normalize_heading(self.heading_to_target - heading)
-            response = int(HEADING_Kp * error)
+            response = self.steering_pid.compute(error = error)
             print(f'imu = {heading} (target = {self.heading_to_target}, response = {response})')
             await self.controller.set_steering(response)
 
@@ -88,8 +87,8 @@ class App():
         await self.controller.set_configuration(\
             deadzone_forward = 1525,
             deadzone_backward = 1475,
-            deadzone_left = 1525,
-            deadzone_right = 1525,
+            deadzone_left = 1430,
+            deadzone_right = 1430,
             Kp = 0.15,
             Ki = 0.25,
             Kd = 0.01
@@ -100,11 +99,12 @@ class App():
             print('please arm controller to continue')
             await self.controller.wait_until_armable()
             await self.controller.arm()
-            
+
             # status loop
             speed = 0
             while True:
                 s = await self.controller.get_status()
+                self.steering_pid.set_moving(s.motion.Input[0] != 0)
                 if not s.armed():
                     # we were disarmed (remotely, hopefully)
                     await self.controller.wait_for_idle()
@@ -124,7 +124,7 @@ class App():
         # wait for sensor loops to finish
         await imu_task
         await gps_task
-        
+
         # tear down connections
         await self.controller.stop()
         await self.gps.stop()
