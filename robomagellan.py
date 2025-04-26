@@ -64,12 +64,13 @@ class TaskGroup(Task):
             await self.active_task.on_status(status)
 
 class Drive(Task):
-    def __init__(self, app, done, distance, heading, velocity):
+    def __init__(self, app, done, distance, heading, velocity, callback = None):
         self.app = app
         self.done = done
         self.distance = distance
         self.heading = heading
         self.velocity = velocity
+        self.callback = callback
         #self.steering_pid = PID.PositionController(Kp=50, Ki=0, Kd=0)
         self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
 
@@ -85,6 +86,8 @@ class Drive(Task):
     async def on_exit(self):
         gps_heading = self.starting_position.get_heading_to(self.previous_position, magnetic=False)
         print(f'[{time.time()}] Drive.on_exit(): gps heading over course = {gps_heading}', flush=True)
+        if self.callback is not None:
+            await self.callback(gps_heading)
 
     async def on_imu(self, orientation, heading):
         error = -normalize_heading(self.heading - heading)
@@ -470,11 +473,12 @@ class App():
     async def imu_task(self):
         # get one IMU measurement to know our starting heading
         orientation = await self.imu.get_orientation()
-        offset = orientation.get_heading()
+        self.offset = orientation.get_heading()
 
         while not self.completed:
             orientation = await self.imu.get_orientation()
-            heading = normalize_heading(orientation.get_heading() - offset)
+            self.measured_heading = orientation.get_heading()
+            heading = normalize_heading(self.measured_heading - self.offset)
             print(f'[{time.time()}] heading = {heading}', flush=True)
 
             if self.active_task is not None:
@@ -505,6 +509,10 @@ class App():
         else:
            self.active_task = self.tasks[self.tid]
            await self.active_task.on_enter()
+    
+    async def update_offset(self, offset):
+        self.offset = normalize_heading(self.offset - offset)
+        print(f'[{time.time()}] course = {offset}, measured = {self.measured_heading}, offset = {self.offset}')
 
     async def run(self):
         # start camera
@@ -585,6 +593,8 @@ class App():
         self.gps = GPS.Connection()
         self.imu = IMU.Connection(host='localhost')
         self.camera = Camera.Connection()
+        self.offset = None
+        self.measured_heading = None
 
         # tasks to perform for this run
         self.completed = False
@@ -592,23 +602,47 @@ class App():
         self.active_task = None
         self.tid = 0
         self.tasks = [\
+            ### Botnic 2025 - Spring
+            # Bonus Cone 1
+            Drive(self, self.task_done, heading = 0, velocity = 1.5, distance = 7, callback = self.update_offset),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.3862491, longitude=-122.0035186).offset(heading=-115, distance=5), velocity = 3, should_stop=True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Backup(self, self.task_done),
+            
+            # Bonus Cone 2
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386620, longitude=-122.003539).offset(heading=180, distance=5), velocity = 3, should_stop=True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Backup(self, self.task_done),
+            
+            # Final Cone
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386843, longitude=-122.003826).offset(heading=135, distance=3).offset(heading=180, distance=2), velocity = 3, should_stop=True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Backup(self, self.task_done),
+            
+            # Return Home
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386425, longitude=-122.003651), velocity = 3, should_stop=False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386248, longitude=-122.003820), velocity = 3, should_stop=True),
+
             ### Botnic 2024
             # Bonus Cone 1
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4117162, longitude=-121.9960500).offset(heading=90,   distance = 2), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
-            Drive(self, self.task_done, heading = -135, velocity = -1.5, distance = -2),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4117162, longitude=-121.9960500).offset(heading=90,   distance = 2), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #Drive(self, self.task_done, heading = -135, velocity = -1.5, distance = -2),
 
             # Bonus Cone 2
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4123961, longitude=-121.9958946).offset(heading=-135, distance = 2), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
-            Drive(self, self.task_done, heading = 45, velocity = -1.5, distance = -2),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4123961, longitude=-121.9958946).offset(heading=-135, distance = 2), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #Drive(self, self.task_done, heading = 45, velocity = -1.5, distance = -2),
 
             # Destination Cone
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4122453, longitude=-121.9961880).offset(heading=135,  distance = 2), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.4122453, longitude=-121.9961880).offset(heading=135,  distance = 2), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
 
             ### July Demo 2024
             # Southern Cone
