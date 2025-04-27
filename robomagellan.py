@@ -473,12 +473,12 @@ class App():
     async def imu_task(self):
         # get one IMU measurement to know our starting heading
         orientation = await self.imu.get_orientation()
-        self.offset = orientation.get_heading()
+        self.initial_heading = orientation.get_heading()
 
         while not self.completed:
             orientation = await self.imu.get_orientation()
-            self.measured_heading = orientation.get_heading()
-            heading = normalize_heading(self.measured_heading - self.offset)
+            self.raw_heading = orientation.get_heading()
+            heading = normalize_heading(self.raw_heading - self.initial_heading)
             print(f'[{time.time()}] heading = {heading}', flush=True)
 
             if self.active_task is not None:
@@ -509,10 +509,10 @@ class App():
         else:
            self.active_task = self.tasks[self.tid]
            await self.active_task.on_enter()
-    
-    async def update_offset(self, offset):
-        self.offset = normalize_heading(self.offset - offset)
-        print(f'[{time.time()}] course = {offset}, measured = {self.measured_heading}, offset = {self.offset}')
+
+    async def update_offset(self, course_heading):
+        self.initial_heading = normalize_heading(self.initial_heading - course_heading)
+        print(f'[{time.time()}] course = {course_heading}, offset = {self.initial_heading}')
 
     async def run(self):
         # start camera
@@ -593,8 +593,8 @@ class App():
         self.gps = GPS.Connection()
         self.imu = IMU.Connection(host='localhost')
         self.camera = Camera.Connection()
-        self.offset = None
-        self.measured_heading = None
+        self.initial_heading = None
+        self.raw_heading = None
 
         # tasks to perform for this run
         self.completed = False
@@ -602,26 +602,28 @@ class App():
         self.active_task = None
         self.tid = 0
         self.tasks = [\
+            # GPS Calibration (do not remove, be careful editing...)
+            Drive(self, self.task_done, heading = 0, velocity = 1.5, distance = 7, callback = self.update_offset),
+
             ### Botnic 2025 - Spring
             # Bonus Cone 1
-            Drive(self, self.task_done, heading = 0, velocity = 1.5, distance = 7, callback = self.update_offset),
             MoveTo(self, self.task_done, target = GPS.Position(latitude=37.3862491, longitude=-122.0035186).offset(heading=-115, distance=5), velocity = 3, should_stop=True),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
             Backup(self, self.task_done),
-            
+
             # Bonus Cone 2
             MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386620, longitude=-122.003539).offset(heading=180, distance=5), velocity = 3, should_stop=True),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
             Backup(self, self.task_done),
-            
+
             # Final Cone
             MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386843, longitude=-122.003826).offset(heading=135, distance=3).offset(heading=180, distance=2), velocity = 3, should_stop=True),
             FindCone(self, self.task_done),
             ContactCone(self, self.task_done),
             Backup(self, self.task_done),
-            
+
             # Return Home
             MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386425, longitude=-122.003651), velocity = 3, should_stop=False),
             MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386248, longitude=-122.003820), velocity = 3, should_stop=True),
