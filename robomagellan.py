@@ -71,8 +71,7 @@ class Drive(Task):
         self.heading = heading
         self.velocity = velocity
         self.callback = callback
-        #self.steering_pid = PID.PositionController(Kp=50, Ki=0, Kd=0)
-        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
+        self.steering_pid = PID.PositionController(Kp=40, Ki=0.5, Kd=100)
 
         # internal state
         self.stopping = False
@@ -143,8 +142,7 @@ class Align(Task):
         self.heading = heading
         self.velocity = velocity
         self.should_stop = should_stop
-        #self.steering_pid = PID.PositionController(Kp=100, Ki=0, Kd=0)
-        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
+        self.steering_pid = PID.PositionController(Kp=40, Ki=0.5, Kd=100)
 
         # internal state
         self.stopping = False
@@ -206,8 +204,7 @@ class ContactCone(Task):
     def __init__(self, app, done):
         self.app = app
         self.done = done
-        #self.steering_pid = PID.PositionController(Kp=32, Ki=0, Kd=0)
-        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
+        self.steering_pid = PID.PositionController(Kp=40, Ki=0.5, Kd=100)
 
         # internal state
         self.stopping = False
@@ -327,16 +324,17 @@ class FindCone(Task):
         await self.done()
 
 class MoveTo(Task):
-    def __init__(self, app, done, target, velocity, should_stop=True):
+    def __init__(self, app, done, target, velocity, should_search=False, should_stop=True):
         self.app = app
         self.done = done
         self.target = target
         self.velocity = velocity
         self.should_stop = should_stop
-        #self.steering_pid = PID.PositionController(Kp=25, Ki=0, Kd=0)
-        self.steering_pid = PID.PositionController(Kp=50, Ki=1, Kd=100)
+        self.should_search = should_search
+        self.steering_pid = PID.PositionController(Kp=40, Ki=0.5, Kd=100)
 
         # internal state
+        self.pings = 0
         self.heading_to_target = 0
         self.stopping = False
         self.previous_position = None
@@ -379,8 +377,19 @@ class MoveTo(Task):
         else:
             await self.stop()
 
+        # if we should search for the cone
+        if distance <= 7 and self.should_search:
+            # has seen cone for a solid second
+            if self.pings >= 30:
+                print(f'[{time.time()}] MoveTo.on_gps(): Cone Acquired', flush=True)
+                await self.stop()
+
     async def on_camera(self, fix):
-        pass
+        # count the number of cone pings
+        if fix is not None:
+            self.pings = self.pings + 1
+        else:
+            self.pings = 0
 
     async def on_status(self, status):
         # wait until our motion ceases before calling task_done()
@@ -607,26 +616,26 @@ class App():
 
             ### Botnic 2025 - Spring
             # Bonus Cone 1
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.3862491, longitude=-122.0035186).offset(heading=-115, distance=5), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
-            Backup(self, self.task_done),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.3862491, longitude=-122.0035186).offset(heading=-115, distance=5), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #Backup(self, self.task_done),
 
             # Bonus Cone 2
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386620, longitude=-122.003539).offset(heading=180, distance=5), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
-            Backup(self, self.task_done),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386620, longitude=-122.003539).offset(heading=180, distance=5), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #Backup(self, self.task_done),
 
             # Final Cone
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386843, longitude=-122.003826).offset(heading=135, distance=3).offset(heading=180, distance=2), velocity = 3, should_stop=True),
-            FindCone(self, self.task_done),
-            ContactCone(self, self.task_done),
-            Backup(self, self.task_done),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386843, longitude=-122.003826).offset(heading=135, distance=3).offset(heading=180, distance=2), velocity = 3, should_stop=True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #Backup(self, self.task_done),
 
             # Return Home
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386425, longitude=-122.003651), velocity = 3, should_stop=False),
-            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386248, longitude=-122.003820), velocity = 3, should_stop=True),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386425, longitude=-122.003651), velocity = 3, should_stop=False),
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.386248, longitude=-122.003820), velocity = 3, should_stop=True),
 
             ### Botnic 2024
             # Bonus Cone 1
