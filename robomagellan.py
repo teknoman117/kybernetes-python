@@ -378,7 +378,7 @@ class MoveTo(Task):
             await self.stop()
 
         # if we should search for the cone
-        if distance <= 7 and self.should_search:
+        if distance <= 5 and self.should_search:
             # has seen cone for a solid second
             if self.pings >= 30:
                 print(f'[{time.time()}] MoveTo.on_gps(): Cone Acquired', flush=True)
@@ -613,6 +613,40 @@ class App():
         self.tasks = [\
             # GPS Calibration (do not remove, be careful editing...)
             Drive(self, self.task_done, heading = 0, velocity = 1.5, distance = 7, callback = self.update_offset),
+
+            ### Botnic 2025 - Summer
+
+            # Cone 2 (Start)
+            #MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53748613, longitude=-122.31562440), velocity = 3, should_search = True, should_stop = True),
+            #FindCone(self, self.task_done),
+            #ContactCone(self, self.task_done),
+            #Backup(self, self.task_done),
+
+            # Cone 3 (0.8)
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53754777, longitude=-122.31505253), velocity = 3, should_search = True, should_stop = True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Backup(self, self.task_done),
+
+            # Cone 4 (0.2)
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53733432, longitude=-122.31514282), velocity = 3, should_search = False, should_stop = False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53716148, longitude=-122.31493763), velocity = 3, should_search = True, should_stop = True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Backup(self, self.task_done),
+
+            # Cone 1 (0.6)
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53703198, longitude=-122.31506475).offset(heading = 0, distance = 4), velocity = 3, should_search = False, should_stop = False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53707248, longitude=-122.31545383).offset(heading = 150, distance = 10), velocity = 3, should_search = False, should_stop = False),
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53707248, longitude=-122.31545383), velocity = 3, should_search = True, should_stop = True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done),
+            Backup(self, self.task_done),
+
+            # Go Home (Destination)
+            MoveTo(self, self.task_done, target = GPS.Position(latitude=37.53703198, longitude=-122.31506475), velocity = 3, should_search = True, should_stop = True),
+            FindCone(self, self.task_done),
+            ContactCone(self, self.task_done)
 
             ### Botnic 2025 - Spring
             # Bonus Cone 1
