@@ -3,6 +3,7 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 from asyncio import TimeoutError, get_event_loop, create_task, sleep, wait_for, Event, Queue, QueueEmpty
+from cobs import cobs
 from crc8 import crc8
 from ctypes import c_uint8, c_uint16, c_int16, c_int32, c_float, memmove, pointer, sizeof, Structure
 from serial_asyncio import open_serial_connection
@@ -17,6 +18,7 @@ FAILURE_TYPE_INVALID_STATE_TRANSITION = 0xC0
 FAILURE_TYPE_REMOTELY_DISABLED = 0xD0
 FAILURE_TYPE_INVALID_WHEN_ARMED = 0xE0
 FAILURE_TYPE_INVALID_WHEN_DISARMED = 0xE1
+FAILURE_TYPE_UNSUPPORTED_PACKET_TYPE = 0xFE
 FAILURE_TYPE_BAD_CHECKSUM = 0xFF
 
 # Motion controller packet types
@@ -33,6 +35,7 @@ PACKET_TYPE_SEND_DISARM = 0xA2
 PACKET_TYPE_RESET_ODOMETER = 0xB0
 PACKET_TYPE_STATUS = 0xD0
 PACKET_TYPE_NACK = 0xE0
+PACKET_TYPE_CHECKSUM_ERROR = 0xE1
 PACKET_TYPE_SYNC = 0xFF
 
 # Motion controller states
@@ -231,9 +234,9 @@ class SyncPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_SYNC
 
     _pack_ = 1
-    _fields_ = [
-        ("bytes", c_uint8 * 15)
-    ]
+    _fields_ = []
+    def __format__(self, spec):
+        return 'SyncPacket()'
 
 class AckPacket(Structure):
     _pack_ = 1
@@ -285,6 +288,13 @@ class NackPacket(Structure):
     def __format__(self, spec):
         return f'NackPacket(command_type_id={self.command_type_id}, failure_type_id={self.failure_type_id})'
 
+class ChecksumErrorPacket(Structure):
+    _pack_ = 1
+    _fields_ = []
+
+    def __format__(self, spec):
+        return f"ChecksumErrorPacket {{}}"
+
 PACKET_TYPE_BY_ID = {
     PACKET_TYPE_CONFIGURATION_SET : ConfigurationSetAckPacket,
     PACKET_TYPE_CONFIGURATION_GET : ConfigurationPacket,
@@ -299,6 +309,7 @@ PACKET_TYPE_BY_ID = {
     PACKET_TYPE_RESET_ODOMETER : ResetOdometerAckPacket,
     PACKET_TYPE_STATUS : StatusPacket,
     PACKET_TYPE_NACK : NackPacket,
+    PACKET_TYPE_CHECKSUM_ERROR : ChecksumErrorPacket,
     PACKET_TYPE_SYNC : SyncPacket
 }
 
@@ -326,24 +337,14 @@ class Connection():
         for packet_type_id in PACKET_TYPE_BY_ID.keys():
             self.command_future_queues[packet_type_id] = Queue()
 
-    async def synchronize(self):
-        # send a sync packet
-        self.send_packet(SyncPacket())
-        while True:
-            # find the first sync byte (0xff)
-            data = await wait_for(self.reader.readexactly(1), timeout=5.0)
-            if data[0] != 0xff:
-                continue
-
-            # sync packet is exactly sixteen 0xff's, so find the remaining 15
-            candidate = await self.reader.readexactly(15)
-            target = bytes([0xff]) * 15
-            if candidate != target:
-                # force a sync packet
-                self.writer.write('\xff')
-                await self.writer.drain()
-            else:
+    async def synchronize(self, attempts=8):
+        for i in range(0, attempts):
+            try:
+                await self.send_command(SyncPacket())
                 return
+            except TimeoutError:
+                pass
+        raise ConnectionError
 
     def send_packet(self, packet):
         data = bytearray()
@@ -355,19 +356,26 @@ class Connection():
         data.extend(hash.digest())
 
         #print(f'[DEBUG {time.time()}] send_packet: {packet}')
-        self.writer.write(data)
+        self.writer.write(cobs.encode(data) + b'\x00')
 
     async def receive_packet(self):
-        pTypeId = (await self.reader.readexactly(1))[0]
-        pType = PACKET_TYPE_BY_ID[pTypeId]
-        data = await self.reader.readexactly(sizeof(pType))
-        checksumRemote = (await self.reader.readexactly(1))[0]
-
-        hash = crc8(bytes([pTypeId]) + data)
-        checksumLocal = hash.digest()[0]
-        if checksumLocal != checksumRemote:
+        # receive the COBS encoded packet but drop the trailing zero byte
+        packet_cobs = (await self.reader.readuntil(b'\x00'))[:-1]
+        if len(packet_cobs) < 1:
             raise InvalidChecksumError
 
+        contents = cobs.decode(packet_cobs)
+        pTypeId = contents[0]
+        data = contents[1:-1]
+        checksumRemote = contents[-1]
+
+        hash = crc8(contents[:-1])
+        checksumLocal = hash.digest()[0]
+        if checksumLocal != checksumRemote:
+            print(f'[DEBUG {time.time()}] receive_packet: partial received, invalid checksum')
+            raise InvalidChecksumError
+
+        pType = PACKET_TYPE_BY_ID[pTypeId]
         packet = pType()
         memmove(pointer(packet), data, sizeof(pType))
         #print(f'[DEBUG {time.time()}] receive_packet: {packet}')
@@ -378,7 +386,11 @@ class Connection():
         f = get_event_loop().create_future()
         self.command_future_queues[type(packet).SEND_TYPE].put_nowait(f)
         self.send_packet(packet)
-        return await wait_for(f, timeout=timeout)
+        try:
+            return await wait_for(f, timeout=timeout)
+        except TimeoutError:
+            f.cancel()
+            raise TimeoutError
 
     async def get_status(self):
         f = get_event_loop().create_future()
@@ -471,7 +483,10 @@ class Connection():
     # packet reactor
     async def loop(self):
         while not self.stop_requested:
-            (packet_type_id, packet) = await self.receive_packet()
+            try:
+                (packet_type_id, packet) = await self.receive_packet()
+            except InvalidChecksumError:
+                continue
 
             if type(packet) is StatusPacket:
                 # detect arming state transitions
@@ -499,22 +514,25 @@ class Connection():
                     f.set_result(packet)
                 self.orientation_futures.clear()
 
-            elif type(packet) is SyncPacket:
-                pass
+            #elif type(packet) is NackPacket:
+            #    # TODO: upon checksum errors, we should be resetting the interface
+            #    try:
+            #        f = self.command_future_queues[packet.command_type_id].get_nowait()
+            #        f.set_result(packet)
+            #        self.command_future_queues[packet.command_type_id].task_done()
+            #    except QueueEmpty:
+            #        print(f'WARNING: future for {packet} not found')
 
-            elif type(packet) is NackPacket:
-                # TODO: upon checksum errors, we should be resetting the interface
-                try:
-                    f = self.command_future_queues[packet.command_type_id].get_nowait()
-                    f.set_result(packet)
-                    self.command_future_queues[packet.command_type_id].task_done()
-                except QueueEmpty:
-                    print(f'WARNING: future for {packet} not found')
+            elif type(packet) is ChecksumErrorPacket:
+                print(f'WARNING: packet loss notification received')
 
             else:
                 # TODO: upon checksum errors, we should be resetting the interface
                 try:
-                    f = self.command_future_queues[packet_type_id].get_nowait()
+                    while True:
+                        f = self.command_future_queues[packet_type_id].get_nowait()
+                        if not f.cancelled():
+                            break
                     f.set_result(packet)
                     self.command_future_queues[packet_type_id].task_done()
                 except QueueEmpty:
@@ -522,10 +540,8 @@ class Connection():
 
     async def start(self):
         self.reader, self.writer = await open_serial_connection(url=self.device, baudrate=self.baudrate)
-        # wait for Uno to boot
-        await sleep(1)
-        await self.synchronize()
         self.task = create_task(self.loop())
+        await self.synchronize(attempts = 8)
 
     async def stop(self):
         self.stop_requested = True
