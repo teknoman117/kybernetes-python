@@ -10,10 +10,10 @@ from kybernetes import MotionController
 class App():
     def __new__(cls, *args, **kwargs):
         return super().__new__(cls)
-    
+
     def __init__(self):
         self.controller = MotionController.Connection()
-    
+
     async def run(self):
         await self.controller.start()
 
@@ -37,6 +37,7 @@ class App():
             await self.controller.set_throttle_pid(2.0)
             while True:
                 s = await self.controller.get_status()
+                print(f'status: {s}')
                 if not s.armed():
                     break
                 await self.controller.set_steering(-s.remote.servoSteeringInput + 1500)
@@ -51,6 +52,7 @@ class App():
             await self.controller.set_throttle_pid(-0.25)
             while True:
                 s = await self.controller.get_status()
+                print(f'status: {s}')
                 if not s.armed():
                     break
                 await self.controller.set_steering(-s.remote.servoSteeringInput + 1500)

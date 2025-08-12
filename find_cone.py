@@ -52,6 +52,7 @@ class App():
             # status loop
             while True:
                 s = await self.controller.get_status()
+                print(f'status = {s}')
                 self.steering_pid.set_moving(s.motion.Input[0] != 0)
 
                 if not s.armed():

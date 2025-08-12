@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-from asyncio import TimeoutError, get_event_loop, create_task, wait_for, Event, Queue, QueueEmpty
+from asyncio import TimeoutError, get_event_loop, create_task, sleep, wait_for, Event, Queue, QueueEmpty
 from crc8 import crc8
 from ctypes import c_uint8, c_uint16, c_int16, c_int32, c_float, memmove, pointer, sizeof, Structure
 from serial_asyncio import open_serial_connection
@@ -102,11 +102,16 @@ class StatusPacket(Structure):
         ("bumperPressed", c_uint8),
         ("odometer", c_int32),
         ("motion", PIDFrame),
+        ("batteryVoltage", c_int16),
+        ("batteryCurrent", c_int16),
+        ("batteryPower", c_int16),
         ("imuStatus", c_uint8),
     ]
 
     def __format__(self, spec):
-        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion}, imu_status={self.imuStatus})'
+        Current_LSB = 7.0 / 2**15
+        Power_LSB = 20.0 * Current_LSB
+        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion}, battery_voltage={self.batteryVoltage / 1000.0} V, battery_current={self.batteryCurrent * Current_LSB} A, battery_power={self.batteryPower * Power_LSB} W, imu_status={self.imuStatus})'
 
     def armed(self):
         return self.remote.state == KILL_SWITCH_STATE_ARMED
@@ -322,6 +327,8 @@ class Connection():
             self.command_future_queues[packet_type_id] = Queue()
 
     async def synchronize(self):
+        # send a sync packet
+        self.send_packet(SyncPacket())
         while True:
             # find the first sync byte (0xff)
             data = await wait_for(self.reader.readexactly(1), timeout=5.0)
@@ -486,7 +493,7 @@ class Connection():
                 for f in self.status_futures:
                     f.set_result(packet)
                 self.status_futures.clear()
-            
+
             elif type(packet) is OrientationPacket:
                 for f in self.orientation_futures:
                     f.set_result(packet)
@@ -515,6 +522,8 @@ class Connection():
 
     async def start(self):
         self.reader, self.writer = await open_serial_connection(url=self.device, baudrate=self.baudrate)
+        # wait for Uno to boot
+        await sleep(1)
         await self.synchronize()
         self.task = create_task(self.loop())
 
