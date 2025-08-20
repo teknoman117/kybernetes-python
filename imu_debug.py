@@ -4,8 +4,10 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import asyncio
+import math
+import time
 
-from kybernetes import MotionController
+from kybernetes import MotionController, normalize_heading
 
 class App():
     def __new__(cls, *args, **kwargs):
@@ -27,8 +29,12 @@ class App():
                 print(f'resetting dhi corrector...')
 
             # Display orientation if not suppressed
+            heading = math.atan2(2.0 * (q.x*q.y - q.w*q.z), q.w*q.w - q.x*q.x + q.y*q.y - q.z*q.z) * 57.2957795
+            heading = normalize_heading(heading)
+            pitch = math.asin(2.0 * (q.y*q.z + q.w*q.x)) * 57.2957795
+            roll = math.atan2(2.0 * (q.w*q.y - q.x*q.z), q.w*q.w - q.x*q.x - q.y*q.y + q.z*q.z) * 57.2957795
             if not self.suppress_orientation:
-                print(f'orientation = {q}')
+                print(f'[{time.time()}] heading = {heading}, roll = {roll}, pitch = {pitch}')
 
     async def run(self):
         await self.controller.start()
@@ -38,10 +44,9 @@ class App():
         while True:
             s = await self.controller.get_status()
             if s.imuStatus & 0x80:
-                print(f'status = {s}')
                 self.suppress_orientation = False
-            else:
-                print(f'DHI Corrector: Invalid - {bin(s.imuStatus)}')
+            elif s.imuStatus != 0:
+                print(f'[{time.time()}] DHI Corrector: Invalid')
                 self.suppress_orientation = True
 
 # run asynchronous app
