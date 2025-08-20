@@ -29,6 +29,7 @@ PACKET_TYPE_THROTTLE_SET_PWM = 0x30
 PACKET_TYPE_THROTTLE_SET_PID = 0x40
 PACKET_TYPE_CRAWL = 0x50
 PACKET_TYPE_ORIENTATION = 0x60
+PACKET_TYPE_RESETDHICORRECTOR = 0x61
 PACKET_TYPE_SEND_ARM = 0xA0
 PACKET_TYPE_SEND_KEEPALIVE = 0xA1
 PACKET_TYPE_SEND_DISARM = 0xA2
@@ -105,16 +106,18 @@ class StatusPacket(Structure):
         ("bumperPressed", c_uint8),
         ("odometer", c_int32),
         ("motion", PIDFrame),
-        ("batteryVoltage", c_int16),
+        ("batteryVoltage", c_uint16),
         ("batteryCurrent", c_int16),
         ("batteryPower", c_int16),
         ("imuStatus", c_uint8),
+        ("_pad1", c_uint8),
+        ("Rsq", c_float),
     ]
 
     def __format__(self, spec):
         Current_LSB = 7.0 / 2**15
         Power_LSB = 20.0 * Current_LSB
-        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion}, battery_voltage={self.batteryVoltage / 1000.0} V, battery_current={self.batteryCurrent * Current_LSB} A, battery_power={self.batteryPower * Power_LSB} W, imu_status={self.imuStatus})'
+        return f'StatusPacket(remote={self.remote}, state={self.state}, battery_low={self.batteryLow}, bumper_pressed={self.bumperPressed}, odometer={self.odometer}, motion={self.motion}, battery_voltage={self.batteryVoltage / 1000.0} V, battery_current={self.batteryCurrent * Current_LSB} A, battery_power={self.batteryPower * Power_LSB} W, imu_status={self.imuStatus}, imu_rsq={self.Rsq})'
 
     def armed(self):
         return self.remote.state == KILL_SWITCH_STATE_ARMED
@@ -135,6 +138,11 @@ class OrientationPacket(Structure):
 
     def __format__(self, spec):
         return f'OrientationPacket(w = {self.w}, x = {self.x}, y = {self.y}, z = {self.z})'
+
+class ResetDHICorrectorPacket(Structure):
+    SEND_TYPE = PACKET_TYPE_RESETDHICORRECTOR
+    _pack_ = 1
+    _fields_ = []
 
 class ConfigurationPacket(Structure):
     RECEIVE_TYPE = PACKET_TYPE_CONFIGURATION_GET
@@ -468,6 +476,10 @@ class Connection():
 
     async def crawl(self):
         command = CrawlPacket()
+        return await self.send_command(command)
+
+    async def reset_dhi_corrector(self):
+        command = ResetDHICorrectorPacket()
         return await self.send_command(command)
 
     async def reset_odometer(self):
