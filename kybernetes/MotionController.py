@@ -345,14 +345,12 @@ class Connection():
         for packet_type_id in PACKET_TYPE_BY_ID.keys():
             self.command_future_queues[packet_type_id] = Queue()
 
-    async def synchronize(self, attempts=8):
-        for i in range(0, attempts):
-            try:
-                await self.send_command(SyncPacket())
-                return
-            except TimeoutError:
-                pass
-        raise ConnectionError
+    async def synchronize(self, timeout=5):
+        try:
+            await wait_for(self.get_status(), timeout=timeout)
+            await self.send_command(SyncPacket(), timeout=1)
+        except TimeoutError:
+            raise ConnectionError
 
     def send_packet(self, packet):
         data = bytearray()
@@ -371,8 +369,12 @@ class Connection():
         packet_cobs = (await self.reader.readuntil(b'\x00'))[:-1]
         if len(packet_cobs) < 1:
             raise InvalidChecksumError
+        try:
+            contents = cobs.decode(packet_cobs)
+        except cobs.DecodeError:
+            raise InvalidChecksumError
 
-        contents = cobs.decode(packet_cobs)
+        # verify the packet checksum
         pTypeId = contents[0]
         data = contents[1:-1]
         checksumRemote = contents[-1]
@@ -383,6 +385,7 @@ class Connection():
             print(f'[DEBUG {time.time()}] receive_packet: partial received, invalid checksum')
             raise InvalidChecksumError
 
+        # construct packet object by type id
         pType = PACKET_TYPE_BY_ID[pTypeId]
         packet = pType()
         memmove(pointer(packet), data, sizeof(pType))
@@ -553,7 +556,7 @@ class Connection():
     async def start(self):
         self.reader, self.writer = await open_serial_connection(url=self.device, baudrate=self.baudrate)
         self.task = create_task(self.loop())
-        await self.synchronize(attempts = 8)
+        await self.synchronize()
 
     async def stop(self):
         self.stop_requested = True
